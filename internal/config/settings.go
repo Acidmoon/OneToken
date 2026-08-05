@@ -24,7 +24,7 @@ type Settings struct {
 	ValidRateQC           float64 // valid 率 < 0.80 仅作模型级 QC（论文试点 per-model 标准）
 	CompletionTokenNormalMax int   // 正常一词答案 token 数上限（1–6）
 	CompletionTokenAnomalyMin int // 异常端点阈值（40–60）
-	KMinCells             int     // 有效 cell < k_min → inconclusive
+	KMinCells             int     // 有效 cell < k_min → inconclusive（占位值 3；设计文档无既定取值，M1 校准后确认）
 
 	// 漂移（设计 §12）
 	DriftBaseline float64 // 参考噪声底线（论文：0.140）

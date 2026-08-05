@@ -5,6 +5,15 @@
 *.key
 *.p12
 
+# 本地真实配置（含密钥环境变量引用；.example 模板保留可跟踪）与证书
+config/providers.yaml
+*.crt
+*.cer
+
+# Go workspace
+ go.work
+ go.work.sum
+
 # 数据库与证据数据（含 WAL/SHM）
 *.db
 *.db-wal

@@ -14,7 +14,7 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 
 | 阶段 | 内容 | 设计文档依据 | 状态 |
 |---|---|---|---|
-| **P0** | Go 项目脚手架、配置骨架 | §10、§14 | ⬜ 待办 |
+| **P0** | Go 项目脚手架、配置骨架 | §10、§14 | ✅ 完成（2026-08-05） |
 | **M1** | store / preprocess / JSD / 校准 + Zenodo 论文复现 | §3.2、§3.3、§3.4、§4、§9.1 | ⬜ 待办 |
 | **M2** | 统一提供商调用层（三协议）+ 采集 + 探测 + 双通道参考 + 端到端审计 | §2、§5、§6、§7、§9.2 | ⬜ 待办 |
 | **M3** | 替换模拟实验 + 主辅操作点 + 报告模块 | §3.4、§9.3 | ⬜ 待办 |
@@ -28,9 +28,9 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 
 | 任务 | 子步骤 | 依赖 | 验收 | 状态 |
 |---|---|---|---|---|
-| **P0.1** 初始化仓库与 Go 模块 | ① `git init` + `.gitignore`（含 `.env`、`*.db`、构建产物）；② `go.mod`（Go 1.22+，pin 依赖版本，注意 modernc.org/sqlite 对 Go 最低版本的要求）；③ 目录骨架 `cmd/onetoken` + `internal/{config,provider,battery,collector,preprocess,detector,fingerprint,verify,calibrate,store,report}` | 无 | `go build ./...` 通过；`.gitignore` 覆盖密钥与数据库 | ⬜ |
-| **P0.2** 配置骨架 | ① `config/prompts.json`（40 cell 提示词模板，§3.1，与配置分离）；② `config/providers.yaml.example`（§6.1 格式：base_url 不含 `/v1`、`api_key_env` 引用、limits）；③ 迁移脚本骨架（幂等） | P0.1 | 配置可加载；模板插值校验防注入 | ⬜ |
-| **P0.3** 配置加载 | ① YAML + 环境变量（密钥不入文件）；② 所有阈值/规则集中配置（漂移底线 0.140、RPM/RPD、并发、超时、**db 路径默认 `~/.onetoken/onetoken.db`**）；③ **采集/审计采样参数默认值**：T=1.0 n=30、T=0 n=3、前沿（≥$5/1M 输入）n=15、审计 k∈{8,16}×n=15、输出上限 16 token（按协议命名映射 §6.2）、`store:false`；④ base_url↔密钥绑定校验骨架 | P0.2 | 单元测试：密钥禁止序列化进日志/报告；绑定校验告警；采样参数默认值断言 | ⬜ |
+| **P0.1** 初始化仓库与 Go 模块 | ① `git init` + `.gitignore`（含 `.env`、`*.db`、构建产物）；② `go.mod`（Go 1.22+，pin 依赖版本，注意 modernc.org/sqlite 对 Go 最低版本的要求）；③ 目录骨架 `cmd/onetoken` + `internal/{config,provider,battery,collector,preprocess,detector,fingerprint,verify,calibrate,store,report}` | 无 | `go build ./...` 通过；`.gitignore` 覆盖密钥与数据库 | ✅ 2026-08-05：git init + Go 1.26.5（安装于 `~/.local/go`，代理 goproxy.cn）+ 目录骨架 + 最小 main；首次提交 475460a |
+| **P0.2** 配置骨架 | ① `config/prompts.json`（40 cell 提示词模板，§3.1，与配置分离）；② `config/providers.yaml.example`（§6.1 格式：base_url 不含 `/v1`、`api_key_env` 引用、limits）；③ 迁移脚本骨架（幂等） | P0.1 | 配置可加载；模板插值校验防注入 | ✅ 2026-08-05：prompts.json 40 cell（10 任务×4 语言）+ providers 模板 + `internal/battery` 加载与防注入校验（5 单测）+ `internal/store/migrations.go` 骨架 |
+| **P0.3** 配置加载 | ① YAML + 环境变量（密钥不入文件）；② 所有阈值/规则集中配置（漂移底线 0.140、RPM/RPD、并发、超时、**db 路径默认 `~/.onetoken/onetoken.db`**）；③ **采集/审计采样参数默认值**：T=1.0 n=30、T=0 n=3、前沿（≥$5/1M 输入）n=15、审计 k∈{8,16}×n=15、输出上限 16 token（按协议命名映射 §6.2）、`store:false`；④ base_url↔密钥绑定校验骨架 | P0.2 | 单元测试：密钥禁止序列化进日志/报告；绑定校验告警；采样参数默认值断言 | ✅ 2026-08-05：`internal/config` 包（yaml.v3）：密钥注入+脱敏（String/GoString/JSON）、base_url 严格校验（url.Parse：userinfo/query/fragment 拒绝、/v1 路径段检查）、YAML 严格解析（KnownFields）、绑定校验（精确域/子域+非知名域宽松告警+本地豁免）接入 Load（Warnings）+ CLI 启动打印；Settings 集中默认值 + ONETOKEN_DB 覆盖；**审查后修复**：%#v 脱敏、BindCheck 接线、环境变量污染测试、/v1 误伤、任务数/语言漂移校验、敏感头拒绝、limits 默认值（22 单测全绿） |
 
 **P0 完成标准**：`go build` + `go vet` + 基础单测全绿，配置加载与安全基线骨架可用。
 
@@ -126,6 +126,7 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 | 2026-08-05 | 设计 v0.4 | 并入四轮审查：effort 取值修正（minimal 候选路径）、base_url 不含 `/v1`、SQLite 部分唯一索引、JSD 无平滑 + 前置门 pin 标度、CheckRedirect 显式配置等 | 审查结论 |
 | 2026-08-05 | 计划 v1.0 | 建立本实施计划（P0+M1–M4 任务拆分）与 AGENTS.md 工作协议 | 用户要求 |
 | 2026-08-05 | 计划 v1.1 | 并入五轮审查：探测器 flag 补齐（5 类对齐设计 §5）、LOO 1-NN 归属 M1.4、采样参数/db 路径入 P0.3、M2 依赖补 M1.1、备份入 M4.3、T2 改写标注 v1.1、风险来源说明；同步修正设计文档脚注（v0.4/四轮） | 审查结论 |
+| 2026-08-05 | P0 完成 | **P0.1–P0.3 全部完成**（见任务表）；Go 1.26.5 安装于 `~/.local/go`（go.dev 大文件被网络干扰，改用阿里云镜像），模块代理 goproxy.cn；首次提交 475460a | 用户批准启动 |
 
 ---
 
@@ -135,6 +136,8 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 |---|---|---|
 | 2026-08-05 | 计划 v1.0 建立：P0+M1–M4 拆分、风险、决策日志、更新规则 | 助手 |
 | 2026-08-05 | 计划 v1.1：并入五轮审查（探测器 flag 补齐、1-NN 归属、采样参数、依赖、备份、风险来源、AGENTS.md 措辞统一） | 助手 |
+| 2026-08-05 | **P0 阶段完成**：P0.1 仓库/Go 模块、P0.2 配置骨架（40-cell 提示词+battery 校验）、P0.3 config 包（密钥/阈值/绑定校验）；11 单测全绿；首次提交 475460a | 助手 |
+| 2026-08-05 | **P0 六轮审查修复**：%#v 密钥脱敏（GoString）、BindCheck 接入 Load（Warnings）+ CLI 启动告警、YAML 严格解析、url.Parse 严格校验（userinfo//v1 误伤）、任务数/语言漂移校验、占位符检测扩展（裸 $/%/system_prompt）、敏感头拒绝、limits 默认值；22 单测全绿 | 助手 |
 
 ---
 

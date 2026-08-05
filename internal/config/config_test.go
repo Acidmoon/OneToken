@@ -23,7 +23,10 @@ func testProvidersPath(t *testing.T) string {
 }
 
 func TestLoadExample(t *testing.T) {
-	// 示例模板无密钥环境变量，Load 应成功并给出告警（宽松模式）
+	// 清空可能存在于真实环境中的密钥变量，保证测试确定性
+	for _, env := range []string{"OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "LOCAL_API_KEY"} {
+		t.Setenv(env, "")
+	}
 	cfg, err := Load(testProvidersPath(t))
 	if err != nil {
 		t.Fatalf("加载示例失败: %v", err)
@@ -31,7 +34,7 @@ func TestLoadExample(t *testing.T) {
 	if len(cfg.Providers) != 3 {
 		t.Fatalf("provider 数 = %d，期望 3", len(cfg.Providers))
 	}
-	// base_url 校验：不含 /v1
+	// base_url 校验：不含 /v1 路径段
 	for _, p := range cfg.Providers {
 		if strings.Contains(p.BaseURL, "/v1") {
 			t.Fatalf("base_url 含 /v1: %s", p.BaseURL)
@@ -39,6 +42,10 @@ func TestLoadExample(t *testing.T) {
 		if p.APIKey() != "" {
 			t.Fatalf("示例配置不应注入密钥: %s", p.Name)
 		}
+	}
+	// 绑定校验已接入 Load：三个 provider 密钥均缺失 → Warnings 有告警
+	if len(cfg.Warnings) < 3 {
+		t.Fatalf("Warnings 应含至少 3 条密钥缺失告警，实际 %d: %v", len(cfg.Warnings), cfg.Warnings)
 	}
 	// 默认设置断言（采样参数默认值）
 	s := cfg.Settings
@@ -62,7 +69,7 @@ func TestLoadExample(t *testing.T) {
 	}
 }
 
-// TestSecretNeverSerialized：密钥永不进入日志/报告/序列化。
+// TestSecretNeverSerialized：密钥永不进入日志/报告/序列化（含 %#v）。
 func TestSecretNeverSerialized(t *testing.T) {
 	const secret = "sk-super-secret-value-123456"
 	p := ProviderConfig{
@@ -80,7 +87,11 @@ func TestSecretNeverSerialized(t *testing.T) {
 	if s := fmt.Sprintf("%+v", p); strings.Contains(s, secret) {
 		t.Fatalf("fmt 泄露密钥: %s", s)
 	}
-	// 3) JSON 序列化不含密钥（apiKey 小写不导出）
+	// 3) %#v（Go 语法表示）经 GoString 拦截
+	if s := fmt.Sprintf("%#v", p); strings.Contains(s, secret) {
+		t.Fatalf("%%#v 泄露密钥: %s", s)
+	}
+	// 4) JSON 序列化不含密钥（apiKey 小写不导出）
 	b, err := json.Marshal(p)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -88,16 +99,45 @@ func TestSecretNeverSerialized(t *testing.T) {
 	if strings.Contains(string(b), secret) {
 		t.Fatalf("JSON 泄露密钥: %s", string(b))
 	}
-	// 4) redact 本身
-	if r := redact(secret); strings.Contains(r, "secret") {
-		t.Fatalf("redact 泄露密钥: %s", r)
+	// 5) redact 边界：空/短密钥不泄露明文
+	if r := redact(""); r != "<empty>" {
+		t.Fatalf("redact 空密钥: %s", r)
+	}
+	if r := redact("ab"); !strings.Contains(r, "redacted") {
+		t.Fatalf("redact 短密钥应脱敏: %s", r)
 	}
 }
 
 func TestValidateProviderRejectsV1(t *testing.T) {
 	p := ProviderConfig{Name: "x", BaseURL: "https://api.example.com/v1", APIKeyEnv: "X", Protocol: "chat"}
 	if err := validateProvider(&p); err == nil {
-		t.Fatal("base_url 含 /v1 应报错")
+		t.Fatal("base_url 含 /v1 路径段应报错")
+	}
+}
+
+// /v10、/v1beta 等非 /v1 路径段不应被误伤（只查路径段，不查主机名/query）。
+func TestValidateProviderAcceptsV10Path(t *testing.T) {
+	p := ProviderConfig{Name: "x", BaseURL: "https://api.example.com/v10", APIKeyEnv: "X", Protocol: "chat"}
+	if err := validateProvider(&p); err != nil {
+		t.Fatalf("/v10 不应误伤: %v", err)
+	}
+	p2 := ProviderConfig{Name: "y", BaseURL: "https://v1.example.com", APIKeyEnv: "Y", Protocol: "chat"}
+	if err := validateProvider(&p2); err != nil {
+		t.Fatalf("主机名 v1.example.com 不应误伤: %v", err)
+	}
+}
+
+func TestValidateProviderRejectsUserinfo(t *testing.T) {
+	p := ProviderConfig{Name: "x", BaseURL: "https://user@attacker.com", APIKeyEnv: "X", Protocol: "chat"}
+	if err := validateProvider(&p); err == nil {
+		t.Fatal("userinfo 应报错")
+	}
+}
+
+func TestValidateProviderRejectsQueryFragment(t *testing.T) {
+	p := ProviderConfig{Name: "x", BaseURL: "https://api.example.com?next=/v1/x", APIKeyEnv: "X", Protocol: "chat"}
+	if err := validateProvider(&p); err == nil {
+		t.Fatal("query 应报错")
 	}
 }
 
@@ -108,6 +148,36 @@ func TestValidateProviderRejectsBadProtocol(t *testing.T) {
 	}
 }
 
+func TestValidateProviderRejectsSensitiveHeader(t *testing.T) {
+	p := ProviderConfig{Name: "x", BaseURL: "https://api.example.com", APIKeyEnv: "X", Protocol: "chat",
+		Headers: map[string]string{"Authorization": "Bearer sk-inline"}}
+	if err := validateProvider(&p); err == nil {
+		t.Fatal("敏感头应报错（防密钥明文落配置）")
+	}
+}
+
+func TestValidateProviderFillsLimitDefaults(t *testing.T) {
+	p := ProviderConfig{Name: "x", BaseURL: "https://api.example.com", APIKeyEnv: "X", Protocol: "chat"}
+	if err := validateProvider(&p); err != nil {
+		t.Fatalf("校验失败: %v", err)
+	}
+	if p.Limits.MaxConcurrency != 8 || p.Limits.TimeoutSec != 60 {
+		t.Fatalf("limits 默认值错误: %+v", p.Limits)
+	}
+}
+
+// TestYAMLUnknownFieldRejected：严格解析，未知字段（如直觉写法的 api_key）显式报错。
+func TestYAMLUnknownFieldRejected(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "providers.yaml")
+	content := "providers:\n  - name: x\n    base_url: https://api.example.com\n    api_key_env: X\n    protocol: chat\n    api_key: sk-inline-leak\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("未知字段 api_key 应报错（严格解析）")
+	}
+}
+
 func TestBindCheckWarnsOnMismatch(t *testing.T) {
 	// openrouter 密钥配到 anthropic 域名 → 告警
 	p := ProviderConfig{
@@ -115,17 +185,17 @@ func TestBindCheckWarnsOnMismatch(t *testing.T) {
 		APIKeyEnv: "OPENROUTER_API_KEY", Protocol: "anthropic",
 		apiKey: "sk-ant-x",
 	}
-	warns := BindCheck(p)
-	if len(warns) == 0 {
+	if w := BindCheck(p); len(w) == 0 {
 		t.Fatal("厂商不匹配应产生告警")
 	}
-	// localhost 本地通道：任意密钥命名不告警（除缺失外）
-	loc := ProviderConfig{
-		Name: "local", BaseURL: "http://localhost:8000",
-		APIKeyEnv: "ANYTHING", Protocol: "chat", apiKey: "local-key",
+	// 同厂商不告警（防误报）
+	ok := ProviderConfig{
+		Name: "same", BaseURL: "https://api.anthropic.com",
+		APIKeyEnv: "ANTHROPIC_API_KEY", Protocol: "anthropic",
+		apiKey: "sk-ant-x",
 	}
-	if w := BindCheck(loc); len(w) != 0 {
-		t.Fatalf("本地通道不应告警: %v", w)
+	if w := BindCheck(ok); len(w) != 0 {
+		t.Fatalf("同厂商不应告警: %v", w)
 	}
 	// 密钥缺失 → 告警
 	empty := ProviderConfig{
@@ -134,6 +204,32 @@ func TestBindCheckWarnsOnMismatch(t *testing.T) {
 	}
 	if w := BindCheck(empty); len(w) == 0 {
 		t.Fatal("密钥缺失应告警")
+	}
+}
+
+// 本地通道变体：127/8、::1、.local 均视为本地，不作厂商匹配。
+func TestBindCheckLocalVariants(t *testing.T) {
+	for _, u := range []string{
+		"http://localhost:8000", "http://127.0.0.2:8000",
+		"http://[::1]:8000", "http://box.local:8000",
+	} {
+		p := ProviderConfig{Name: "local", BaseURL: u, APIKeyEnv: "ANYTHING", Protocol: "chat", apiKey: "k"}
+		if w := BindCheck(p); len(w) != 0 {
+			t.Fatalf("%s 应视为本地通道: %v", u, w)
+		}
+	}
+	// 域名混淆：localhost.evil.com 不是本地通道 → 应有告警
+	p := ProviderConfig{Name: "x", BaseURL: "https://localhost.evil.com", APIKeyEnv: "OPENAI_API_KEY", Protocol: "auto", apiKey: "sk-x"}
+	if w := BindCheck(p); len(w) == 0 {
+		t.Fatal("localhost.evil.com 不应被视为本地通道")
+	}
+}
+
+// 非知名厂商域 + 密钥 → 宽松告警（防"攻击者域名 + 真实厂商密钥环境变量名"组合绕过）。
+func TestBindCheckUnknownDomainWarns(t *testing.T) {
+	p := ProviderConfig{Name: "x", BaseURL: "https://evil.example", APIKeyEnv: "OPENAI_API_KEY", Protocol: "auto", apiKey: "sk-x"}
+	if w := BindCheck(p); len(w) == 0 {
+		t.Fatal("非知名域 + 密钥应给出宽松告警")
 	}
 }
 

@@ -15,6 +15,9 @@ import (
 // Languages 是论文规定的四种提示语言（与 prompts.json 一致）。
 var Languages = []string{"en", "ru", "zh", "ar"}
 
+// taskCount 是 40-cell 电池的任务数（40 = taskCount × len(Languages)）。
+const taskCount = 10
+
 // Task 描述一个探针任务。
 type Task struct {
 	ID          string            `json:"id"`
@@ -25,9 +28,10 @@ type Task struct {
 
 // Battery 是 40-cell 电池的加载结果。
 type Battery struct {
-	SchemaVersion int    `json:"schema_version"`
-	SystemPrompt  string `json:"system_prompt"`
-	Tasks         []Task `json:"tasks"`
+	SchemaVersion int      `json:"schema_version"`
+	SystemPrompt  string   `json:"system_prompt"`
+	Languages     []string `json:"languages"` // 与包内常量交叉校验，防双份定义漂移
+	Tasks         []Task   `json:"tasks"`
 }
 
 // CellID 返回 task×lang 的 cell 标识（"task:lang"），
@@ -52,22 +56,36 @@ func Load(path string) (*Battery, error) {
 
 // Validate 校验电池结构完整性（防缺失/防注入）：
 //   - schema_version 必须为 1
-//   - 任务 id 唯一、非空
+//   - 任务数必须为 10（40 cell = 10 任务 × 4 语言）
+//   - 声明的语言列表与内置常量一致（防双份定义漂移）
+//   - 任务 id 唯一、非空、不含 ':'（cell 标识为 task:lang 两段格式）
 //   - 每任务覆盖全部四种语言且提示非空
-//   - 提示不得含模板插值占位符（{{ }}、${...}），防止后续提示组装时的注入
+//   - 提示与 system_prompt 均不得含插值/格式化占位符（防后续提示组装的注入）
 //   - closed 空间必须声明空间大小；open 空间不得声明
 func (b *Battery) Validate() error {
 	if b.SchemaVersion != 1 {
 		return fmt.Errorf("battery: schema_version=%d，期望 1", b.SchemaVersion)
 	}
+	if len(b.Tasks) != taskCount {
+		return fmt.Errorf("battery: 任务数=%d，期望 %d（40 cell = 10 任务 × 4 语言）", len(b.Tasks), taskCount)
+	}
+	if !sameLanguages(b.Languages) {
+		return fmt.Errorf("battery: languages=%v 与内置语言 %v 不一致", b.Languages, Languages)
+	}
 	if strings.TrimSpace(b.SystemPrompt) == "" {
 		return errors.New("battery: system_prompt 为空")
+	}
+	if msg := checkInterpolation(b.SystemPrompt); msg != "" {
+		return fmt.Errorf("battery: system_prompt %s", msg)
 	}
 	seen := make(map[string]bool, len(b.Tasks))
 	for i := range b.Tasks {
 		t := &b.Tasks[i]
 		if strings.TrimSpace(t.ID) == "" {
 			return fmt.Errorf("battery: 第 %d 个任务 id 为空", i)
+		}
+		if strings.Contains(t.ID, ":") {
+			return fmt.Errorf("battery: 任务 id %q 含 ':'（cell 标识为 task:lang 两段格式）", t.ID)
 		}
 		if seen[t.ID] {
 			return fmt.Errorf("battery: 任务 id 重复: %q", t.ID)
@@ -90,12 +108,47 @@ func (b *Battery) Validate() error {
 			if strings.TrimSpace(p) == "" {
 				return fmt.Errorf("battery: 任务 %s 语言 %s 提示为空", t.ID, lang)
 			}
-			if strings.Contains(p, "{{") || strings.Contains(p, "}}") || strings.Contains(p, "${") {
-				return fmt.Errorf("battery: 任务 %s 语言 %s 提示含模板插值占位符（防注入）", t.ID, lang)
+			if msg := checkInterpolation(p); msg != "" {
+				return fmt.Errorf("battery: 任务 %s 语言 %s 提示 %s", t.ID, lang, msg)
 			}
 		}
 	}
 	return nil
+}
+
+// checkInterpolation 检查文本是否含模板/变量/格式化占位符，返回错误描述或空串。
+// 约定：提示词组装只允许纯文本，禁止任何模板引擎/格式化拼接（防注入）。
+func checkInterpolation(s string) string {
+	if strings.Contains(s, "{{") || strings.Contains(s, "}}") {
+		return "含 {{ }} 模板占位符（防注入）"
+	}
+	if strings.Contains(s, "${") {
+		return "含 ${} 变量占位符（防注入）"
+	}
+	if strings.Contains(s, "$") {
+		return "含裸 $ 变量（防注入）"
+	}
+	if strings.Contains(s, "%") {
+		return "含 % 格式化占位符（防注入）"
+	}
+	return ""
+}
+
+// sameLanguages 校验配置声明的语言与内置常量一致（防双份定义漂移）。
+func sameLanguages(langs []string) bool {
+	if len(langs) != len(Languages) {
+		return false
+	}
+	set := make(map[string]bool, len(langs))
+	for _, l := range langs {
+		set[l] = true
+	}
+	for _, l := range Languages {
+		if !set[l] {
+			return false
+		}
+	}
+	return true
 }
 
 // Cells 返回全部 cell 标识（task×lang，共 40 个）。
