@@ -2,7 +2,7 @@
 
 > **依据论文**：《One Token Is Enough: Fingerprinting and Verifying Large Language Models from Single-Token Output Distributions》（arXiv:2607.10252，Tomáš Bruckner）
 >
-> **文档状态**：v0.6（并入 M1.3 实现后的接口契约演进）
+> **文档状态**：v0.7（并入 M1.4 校准算法实现后的接口契约演进）
 > **决策记录**：
 > - 实现语言：**Go**（IO 密集场景，启动毫秒级、单二进制、goroutine 并发天然适配批量采集；开发/迭代快）——用户拍板。
 > - **统一提供商调用层为系统核心**：任意 BaseURL + API Key 即可请求，三种协议适配（OpenAI Responses / OpenAI chat completions 兼容 / Anthropic messages），参考注册（enroll）与待审核模型（audit）共用此层——用户评审意见 1。
@@ -96,7 +96,7 @@
 | `internal/detector` | 测量有效性探测与清洗（依赖 preprocess 分类结果），与 verify 解耦 | `Screen(processed) → {ok, flags, cleaned}` |
 | `internal/fingerprint` | 分布估计、**基 2 JSD（自写，直接按论文 Eq.1）**、指纹对象（构建自 `store.Fingerprint`） | `Distance(a, b *Fingerprint) (float64, int)`——返回 (距离, 参与 cell 数)，参与数供上层按有效 cell < k_min 判 inconclusive；`Build(responses) (*Fingerprint, error)` |
 | `internal/verify` | 判定：JSD vs τ（按 (k,n,通道) 匹配校准库），含 inconclusive 缓冲 | `Verify(ctx, target Provider, claimed Fingerprint, k, n) → Verdict` |
-| `internal/calibrate` | genuine/impostor 试验、ROC/AUC/EER、bootstrap CI、(k,n,通道) 分档（M1 范围）；1-NN（§3.5，v1.2）/UPGMA/ARI（报告，v1.1）为后续里程碑 | `Calibrate(store) → CalibrationReport` |
+| `internal/calibrate` | genuine/impostor 试验（分裂半奇偶切分原语）、ROC/AUC/EER、bootstrap CI、(k,n,通道) 分档（M1 范围）；LOO 1-NN 已实现（复现用途，投产路径 v1.2）；UPGMA/ARI（报告，v1.1）为后续里程碑 | `Calibrate(genuine, impostor []float64, opts) → *store.Calibration`（分档键 Scope/K/NPerCell/通道 与 CalibratedAt 由调用方填充；空输入或非有限阈值返回 nil 无效校准）；`SplitHalves` / `LOO1NN` |
 | `internal/reporter` | 距离矩阵、聚类图（v1.1）、单端点报告、告警；**Go `html/template` 默认转义防 XSS** | `Report(auditID) → md/html` |
 | `internal/store` | JSON/JSONL 文件存储：目录布局（§4.1）、原子写（tmp+rename）、JSONL 追加、幂等去重索引、证据链（append-only + raw_sha256）、schema_version 校验 | SaveAudit / AppendResponse / LoadResponses / SaveFingerprint / ... |
 | `internal/config` | 配置加载（YAML/环境变量），密钥用不可序列化类型；**所有阈值/规则集中配置** | `Load(path) → Config` |
@@ -163,6 +163,12 @@ Unicode NFC → 剥离标点/引号 → 大小写折叠 → 阿拉伯-印度/中
 - **实现要点（Go 自写，直接按论文公式）**：JSD 基 2 = `(KL(p‖m) + KL(q‖m)) / (2·ln2)`，m=(p+q)/2；**KL 取自然对数、整体除以 ln2**；采用 **0·ln0=0 约定、无任何平滑**——JSD 中 m 的支撑是 p∪q 的并集，从不出现未定义项，加性平滑会系统性改变每个值，与论文"支持不相交也可用"的约定冲突；**单位标度（sqrt vs 原始）以 M1 前置门 pin 论文实现语义为准**（scipy `jensenshannon` 返回的是 sqrt(JSD)，若论文用 scipy 则其常数是 sqrt 标度，反之亦然）——"值域 [0,1]"不足以区分两种标度；M1 验收必须含**距离值级回归测试**，按 §9.1 的分层重放方案执行；
 - 判定：`s = D(ref, target)`，若 `s ≤ τ` → **pass**，否则 → **suspicious**；
 - **操作点选择**：默认误报优先——τ 对应校准 ROC 上 FPR ≈ 1% 的点（而非 EER 点）。配套约束：① τ 是 (k, n, 通道) 的函数，校准按档存储、审计精确匹配；② 阈值邻域判定缓冲：|s−τ| 落在 bootstrap CI 内时判 **inconclusive**，触发重复审计；③ 校准输出同时给出 τ_fpr1 处的 TPR 估计与 CI（操作点必须定义漏报半边）；④ τ 的 1% 分位数在小样本下 CI 极大，报告 bootstrap CI，样本不足回退全局档并标注。
+
+- **τ_fpr 计算语义（v0.7 明确）**：取 FPR ≤ target 的**最宽松**阈值（FPR 最大的满足点，误报不超限）；target 低于数据分辨率（最小非零 FPR 不可达，如小样本/同值样本导致 FPR 跳变）时阈值非有限（τ=−∞）——**该档位视为无效校准，Calibrate 返回 nil，调用方回退全局档并标注**（上述 ④ 样本不足回退口径）；AUC 用曼-惠特尼 U 统计（tie 取 0.5），与 sklearn `roc_auc_score` 对拍一致（黄金值已落库单测）；得分含非有限值时过滤后重算，全部被过滤视为空输入；
+
+- **genuine/impostor 对构造归属**：`SplitHalves` 为奇偶切分原语；半指纹构建、模型配对与 D_genuine/D_impostor 聚合在 M1.6 重放 harness 完成（本里程碑只交付算法层与校准记录）；
+
+- **τ 的 CI 缺口（v0.7 记录，M2.5 裁决）**：§3.3 ②"|s−τ| 落在 bootstrap CI 内判 inconclusive"需要 τ 的 CI，当前校准实现只产 TPR 的 CI（store.Calibration schema 亦无 τ CI 字段）；M2.5 落地时裁决（补 τ CI 字段或重新解释为 TPR CI 近似）；τ_fpr5 仅存阈值，其 TPR 由 M3.2 评估时从 ROC 重算；
 
 ### 3.4 阈值校准
 
@@ -609,4 +615,4 @@ onetoken/
 
 ---
 
-*本文档依据论文 arXiv:2607.10252 的协议与数据设计；v0.6 并入 M1.3 实现后的接口契约演进（§2.1 fingerprint 签名、§3.3 T=0 变体语义）；v0.5 并入用户评审意见（统一提供商调用层、Go 性能选型、JSON/JSONL 存储）与五轮对抗式审查结论。*
+*本文档依据论文 arXiv:2607.10252 的协议与数据设计；v0.7 并入 M1.4 校准算法实现后的接口契约演进（§2.1 calibrate 签名、§3.4 τ_fpr 计算语义）；v0.6 并入 M1.3 实现后的接口契约演进（§2.1 fingerprint 签名、§3.3 T=0 变体语义）；v0.5 并入用户评审意见（统一提供商调用层、Go 性能选型、JSON/JSONL 存储）与五轮对抗式审查结论。*
