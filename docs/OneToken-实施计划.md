@@ -43,7 +43,7 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 | 任务 | 子步骤 | 依赖 | 验收 | 状态 |
 |---|---|---|---|---|
 | **M1.1** 存储层（JSON/JSONL，§4） | ① §4.1 目录布局（models/fingerprints/audits/responses/calibrations/drift）；② 原子写（tmp+rename）+ 目录自动创建；③ 幂等：responses JSONL 追加 + 内存 map 去重（cell+sample_idx）；④ 证据链：raw_sha256 + append-only 约定；⑤ schema_version 校验（不匹配拒绝加载）；⑥ 路径可配置（默认 ~/.onetoken/data/，ONETOKEN_DATA 覆盖） | P0.2 | 单测：原子写（无半文件残留）、JSONL 追加/读回、幂等重跑去重索引、证据链哈希、schema_version 拒绝、导入导出往返 | ✅ 2026-08-05：`internal/store` 包实现：类型定义（Model/Fingerprint/Response/Audit/Calibration/DriftEntry）、原子写（tmp+fsync+rename）、JSONL 追加（O_APPEND）、幂等索引（ResponseKey cell+idx）、sanitize 路径穿越防护、schema_version 泛型校验、导入导出往返（拷贝目录即导出）；13 单测全绿 |
-| **M1.2** preprocess 归一化+分类 | ① §3.2 管线：NFC→标点剥离→大小写折叠→数字映射（阿拉伯-印度/中文）→首 token→颜色词表；② 分类 valid/invalid/refusal/empty（**无静默丢弃**）；③ 黄金样本单测（Zenodo 数据抽取） | P0.2 | 边界测试全绿：阿拉伯-印度数字、中文数字、emoji、全角/半角、多 token 首 token 切分 | ⬜ |
+| **M1.2** preprocess 归一化+分类 | ① §3.2 管线：NFC→标点剥离→大小写折叠→数字映射（阿拉伯-印度/中文）→首 token→颜色词表；② 分类 valid/invalid/refusal/empty（**无静默丢弃**）；③ 黄金样本单测（Zenodo 数据抽取） | P0.2 | 边界测试全绿：阿拉伯-印度数字、中文数字、emoji、全角/半角、多 token 首 token 切分 | ✅ 2026-08-05：`internal/preprocess` 包：NFC（x/text/norm）→剥离标点/引号/符号（emoji）→小写→数字映射（阿印/波印/全角/中文数词解析至亿）；分类 valid/invalid(出空间或多词)/refusal(四语言核心词包含匹配)/empty；颜色/硬币跨语言词表→规范码；多词前置判定；工程约定（首 token 空格启发式、random_letter 放宽为单字母、负号剥离行为）注释在案；21 单测（含 40-cell 真实电池冒烟） |
 | **M1.3** fingerprint：分布 + 基 2 JSD | ① 经验分布估计（有效样本）；② JSD：`(KL(p‖m)+KL(q‖m))/(2·ln2)`、KL 自然对数、**0·ln0=0 无平滑**；③ cell 双方 ≥10 有效样本才入平均（论文 Eq.1）；④ T=0 变体 | M1.1、M1.2 | 合成向量单测（对称性、有界 [0,1]、不相交支持）；与 scipy `jensenshannon(p,q,base=2)` **平方后**对拍（注意 sqrt 差异） | ⬜ |
 | **M1.4** calibrate：ROC/AUC/EER/bootstrap | ① 分裂半 genuine / impostor 试验构造（重复奇偶切分）；② ROC/AUC/EER；③ bootstrap CI；④ (k,n,通道) 分档存储（§4 calibrations 表）；⑤ **LOO 1-NN**（自写，仅用于 M1.6 复现家族分类；设计 §2.1 标注 v1.2，此实现为复现所需，投产路径在 v1.2） | M1.1、M1.3 | 构造性单测：perfect 分类器 AUC=1、random AUC=0.5；CI 覆盖正确性抽查；1-NN 最近邻命中单测 | ⬜ |
 | **M1.5** 前置门：pin 论文实现语义 | ① 下载 Zenodo 数据集（doi:10.5281/zenodo.21278557）+ 软件归档（doi:10.5281/zenodo.21278793），记录校验和；② 核对论文实现：是否 scipy、base 参数、**是否取 sqrt**、是否平滑、cell 过滤规则；③ 输出《语义 pin 记录》写入本文件备注 | 外部数据 | 语义 pin 明确：常数标度（sqrt vs 原始）确定 | ⬜ |
@@ -142,6 +142,8 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 | 2026-08-05 | **设计 v0.5 + 计划 v1.2**：存储改分目录 JSON/JSONL（用户决议）；M1.1 改为 JSON 存储层；远程仓库 origin 已配置（https://github.com/Acidmoon/OneToken.git，推送待认证） | 用户评审意见 |
 | 2026-08-05 | **M1.1 完成**：JSON/JSONL 存储层实现（原子写/幂等/证据链/schema_version/sanitize），13 单测；累计 35 单测全绿 | 助手 |
 | 2026-08-05 | **M1.1 七轮审查修复**：sanitize Windows 保留名/非法字符/NUL、原子写统一 0644+目录 fsync、Save 复制入参、JSONL 行号错误、往返测试改 DeepEqual、schema 拒绝参数化、导入导出增强、并发追加测试；config 移除 ONETOKEN_DB 死代码；设计 §4.2 JSONL 版本豁免；文档 v0.4 残留清理（实施计划头部/P0.2/P0.3/M4.3、AGENTS.md）——36 单测全绿（含 -race） | 助手 |
+| 2026-08-05 | **M1.2 完成**：preprocess 归一化+分类（NFC/数字映射含中文数词解析/四语言拒绝/颜色硬币词表/多词判定）；21 单测；累计 57 全绿（含 -race） | 助手 |
+| 2026-08-05 | **M1.2 八轮审查修复**：multi-word 判定移至词表折叠之前（防 "blue sky" 放行）、refusal 英文词边界正则（vacant/lubricant 不再误报）、俄语 navy 无连字符变体、中文数词亿万分段文法（一万亿/一亿五千万）、refusal 模式扩充（لااستطيع/不知道/не знаю）、coin 补 head、颜色词表扩（单字中文色+高频色系归并）、小数/负号伪影与无空格中文整句文档化+测试；66 单测全绿（含 -race）；go.mod tidy（x/text 去 indirect） | 助手 |
 
 ---
 
