@@ -2,7 +2,7 @@
 
 > **依据论文**：《One Token Is Enough: Fingerprinting and Verifying Large Language Models from Single-Token Output Distributions》（arXiv:2607.10252，Tomáš Bruckner）
 >
-> **文档状态**：v0.5（已并入用户评审意见 + 五轮对抗式审查结论）
+> **文档状态**：v0.6（并入 M1.3 实现后的接口契约演进）
 > **决策记录**：
 > - 实现语言：**Go**（IO 密集场景，启动毫秒级、单二进制、goroutine 并发天然适配批量采集；开发/迭代快）——用户拍板。
 > - **统一提供商调用层为系统核心**：任意 BaseURL + API Key 即可请求，三种协议适配（OpenAI Responses / OpenAI chat completions 兼容 / Anthropic messages），参考注册（enroll）与待审核模型（audit）共用此层——用户评审意见 1。
@@ -94,7 +94,7 @@
 | `internal/collector` | 并发采集：worker pool（per-provider 并发上限 4–8）、幂等键、可恢复续采、种子打乱、限流预算、失败重试与总 deadline | `RunBattery(ctx, provider, cells, n, T) → []Raw` |
 | `internal/preprocess` | **归一化 + 分类**（valid/invalid/refusal/empty），在采样与探测之前运行 | `NormalizeClassify(raw) → Processed` |
 | `internal/detector` | 测量有效性探测与清洗（依赖 preprocess 分类结果），与 verify 解耦 | `Screen(processed) → {ok, flags, cleaned}` |
-| `internal/fingerprint` | 分布估计、**基 2 JSD（自写，直接按论文 Eq.1）**、指纹对象 | `Distance(a, b Fingerprint) float64` |
+| `internal/fingerprint` | 分布估计、**基 2 JSD（自写，直接按论文 Eq.1）**、指纹对象（构建自 `store.Fingerprint`） | `Distance(a, b *Fingerprint) (float64, int)`——返回 (距离, 参与 cell 数)，参与数供上层按有效 cell < k_min 判 inconclusive；`Build(responses) (*Fingerprint, error)` |
 | `internal/verify` | 判定：JSD vs τ（按 (k,n,通道) 匹配校准库），含 inconclusive 缓冲 | `Verify(ctx, target Provider, claimed Fingerprint, k, n) → Verdict` |
 | `internal/calibrate` | genuine/impostor 试验、ROC/AUC/EER、bootstrap CI、(k,n,通道) 分档（M1 范围）；1-NN（§3.5，v1.2）/UPGMA/ARI（报告，v1.1）为后续里程碑 | `Calibrate(store) → CalibrationReport` |
 | `internal/reporter` | 距离矩阵、聚类图（v1.1）、单端点报告、告警；**Go `html/template` 默认转义防 XSS** | `Report(auditID) → md/html` |
@@ -157,6 +157,8 @@ Unicode NFC → 剥离标点/引号 → 大小写折叠 → 阿拉伯-印度/中
 - 距离（论文 Eq.1）：
 
   D(Mₐ, M_b) = (1/|B′|) Σ₍ₜ,ℓ₎∈B′ JSD(p̂ᵃₜ,ℓ ‖ p̂ᵇₜ,ℓ)，JSD 取基 2，cell 双方 ≥10 有效样本；
+
+  **T=0 变体（v0.6 明确语义）**：T=0 每 cell 采样 n=3，无法达主距离 ≥10 门槛，其比较门槛放宽为双方 ≥1 有效样本（`DistanceT0`）；T0 距离仅作确定性比对辅助信号（§5 `temperature-not-honored` 的分布侧工具），**不进入判定主路径**，最终口径以 M2.4 探测器实现为准；
 
 - **实现要点（Go 自写，直接按论文公式）**：JSD 基 2 = `(KL(p‖m) + KL(q‖m)) / (2·ln2)`，m=(p+q)/2；**KL 取自然对数、整体除以 ln2**；采用 **0·ln0=0 约定、无任何平滑**——JSD 中 m 的支撑是 p∪q 的并集，从不出现未定义项，加性平滑会系统性改变每个值，与论文"支持不相交也可用"的约定冲突；**单位标度（sqrt vs 原始）以 M1 前置门 pin 论文实现语义为准**（scipy `jensenshannon` 返回的是 sqrt(JSD)，若论文用 scipy 则其常数是 sqrt 标度，反之亦然）——"值域 [0,1]"不足以区分两种标度；M1 验收必须含**距离值级回归测试**，按 §9.1 的分层重放方案执行；
 - 判定：`s = D(ref, target)`，若 `s ≤ τ` → **pass**，否则 → **suspicious**；
@@ -607,4 +609,4 @@ onetoken/
 
 ---
 
-*本文档依据论文 arXiv:2607.10252 的协议与数据设计；v0.5 已并入用户评审意见（统一提供商调用层、Go 性能选型、JSON/JSONL 存储）与五轮对抗式审查结论。*
+*本文档依据论文 arXiv:2607.10252 的协议与数据设计；v0.6 并入 M1.3 实现后的接口契约演进（§2.1 fingerprint 签名、§3.3 T=0 变体语义）；v0.5 并入用户评审意见（统一提供商调用层、Go 性能选型、JSON/JSONL 存储）与五轮对抗式审查结论。*

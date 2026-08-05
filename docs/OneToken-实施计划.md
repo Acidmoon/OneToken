@@ -44,7 +44,7 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 |---|---|---|---|---|
 | **M1.1** 存储层（JSON/JSONL，§4） | ① §4.1 目录布局（models/fingerprints/audits/responses/calibrations/drift）；② 原子写（tmp+rename）+ 目录自动创建；③ 幂等：responses JSONL 追加 + 内存 map 去重（cell+sample_idx）；④ 证据链：raw_sha256 + append-only 约定；⑤ schema_version 校验（不匹配拒绝加载）；⑥ 路径可配置（默认 ~/.onetoken/data/，ONETOKEN_DATA 覆盖） | P0.2 | 单测：原子写（无半文件残留）、JSONL 追加/读回、幂等重跑去重索引、证据链哈希、schema_version 拒绝、导入导出往返 | ✅ 2026-08-05：`internal/store` 包实现：类型定义（Model/Fingerprint/Response/Audit/Calibration/DriftEntry）、原子写（tmp+fsync+rename）、JSONL 追加（O_APPEND）、幂等索引（ResponseKey cell+idx）、sanitize 路径穿越防护、schema_version 泛型校验、导入导出往返（拷贝目录即导出）；13 单测全绿 |
 | **M1.2** preprocess 归一化+分类 | ① §3.2 管线：NFC→标点剥离→大小写折叠→数字映射（阿拉伯-印度/中文）→首 token→颜色词表；② 分类 valid/invalid/refusal/empty（**无静默丢弃**）；③ 黄金样本单测（Zenodo 数据抽取） | P0.2 | 边界测试全绿：阿拉伯-印度数字、中文数字、emoji、全角/半角、多 token 首 token 切分 | ✅ 2026-08-05：`internal/preprocess` 包：NFC（x/text/norm）→剥离标点/引号/符号（emoji）→小写→数字映射（阿印/波印/全角/中文数词解析至亿）；分类 valid/invalid(出空间或多词)/refusal(四语言核心词包含匹配)/empty；颜色/硬币跨语言词表→规范码；多词前置判定；工程约定（首 token 空格启发式、random_letter 放宽为单字母、负号剥离行为）注释在案；21 单测（含 40-cell 真实电池冒烟） |
-| **M1.3** fingerprint：分布 + 基 2 JSD | ① 经验分布估计（有效样本）；② JSD：`(KL(p‖m)+KL(q‖m))/(2·ln2)`、KL 自然对数、**0·ln0=0 无平滑**；③ cell 双方 ≥10 有效样本才入平均（论文 Eq.1）；④ T=0 变体 | M1.1、M1.2 | 合成向量单测（对称性、有界 [0,1]、不相交支持）；与 scipy `jensenshannon(p,q,base=2)` **平方后**对拍（注意 sqrt 差异） | ⬜ |
+| **M1.3** fingerprint：分布 + 基 2 JSD | ① 经验分布估计（有效样本）；② JSD：`(KL(p‖m)+KL(q‖m))/(2·ln2)`、KL 自然对数、**0·ln0=0 无平滑**；③ cell 双方 ≥10 有效样本才入平均（论文 Eq.1）；④ T=0 变体 | M1.1、M1.2 | 合成向量单测（对称性、有界 [0,1]、不相交支持）；与 scipy `jensenshannon(p,q,base=2)` **平方后**对拍（注意 sqrt 差异） | ✅ 2026-08-05：`internal/fingerprint` 包：KL（0·ln0=0，发散 +Inf）、JSD（原始标度不取 sqrt）、Normalize、Build（按 cell×温度分组、仅 valid 入指纹、valid_rate）、Distance/CellJSDs（Eq.1，双方 ≥10 过滤、无共同 cell 返 (0,0)）、T0 变体（门槛 ≥1）；16 单测全绿，含 **scipy 1.18.0 jensenshannon(base=2)² 黄金值对拍**（8 组，容差 1e-12）+ 对称性/有界性/部分不相交 0.5 手算/过滤规则；累计 82 单测全绿。**审查后修复**（正确性/安全/需求三视角）：Build 非法温度（NaN/±Inf/负）与同 cell 混合正温度 → error（ErrTemperature）、超长 Normalized（>1KB）与空串 valid 防御性跳过、全零计数 dist 过滤（Normalize 后非空）、非有限 JSD 不进均值、退化输入语义文档化+测试快照；**设计 v0.6**（Distance 签名 `(float64,int)` 与 T0 门槛留痕 §2.1/§3.3） |
 | **M1.4** calibrate：ROC/AUC/EER/bootstrap | ① 分裂半 genuine / impostor 试验构造（重复奇偶切分）；② ROC/AUC/EER；③ bootstrap CI；④ (k,n,通道) 分档存储（§4 calibrations 表）；⑤ **LOO 1-NN**（自写，仅用于 M1.6 复现家族分类；设计 §2.1 标注 v1.2，此实现为复现所需，投产路径在 v1.2） | M1.1、M1.3 | 构造性单测：perfect 分类器 AUC=1、random AUC=0.5；CI 覆盖正确性抽查；1-NN 最近邻命中单测 | ⬜ |
 | **M1.5** 前置门：pin 论文实现语义 | ① 下载 Zenodo 数据集（doi:10.5281/zenodo.21278557）+ 软件归档（doi:10.5281/zenodo.21278793），记录校验和；② 核对论文实现：是否 scipy、base 参数、**是否取 sqrt**、是否平滑、cell 过滤规则；③ 输出《语义 pin 记录》写入本文件备注 | 外部数据 | 语义 pin 明确：常数标度（sqrt vs 原始）确定 | ⬜ |
 | **M1.6** 数据重放与分层回归 | ① 重放归一化→分布→JSD 矩阵→ROC；② **cell 级中位数**：同模型分裂半 0.075、跨模型 0.489（6,564 genuine / 107 万 impostor cell 对），±5%；③ **模型对级 D 中位数**：跨 provider 0.227、噪声底线 0.140，±5%；④ 逐 cell 黄金样本对精确值校验；⑤ 全矩阵结构检查（genuine 整体 < impostor）；⑥ AUC 0.971 / EER 7.3% / 1-NN 家族分类 59.5%（±2pp）；ARI 低值（0.023）属正常 | M1.1–M1.5 | 见左列；回归脚本可复现（含数据版本哈希） | ⬜ |
@@ -128,6 +128,7 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 | 2026-08-05 | 计划 v1.1 | 并入五轮审查：探测器 flag 补齐（5 类对齐设计 §5）、LOO 1-NN 归属 M1.4、采样参数/db 路径入 P0.3、M2 依赖补 M1.1、备份入 M4.3、T2 改写标注 v1.1、风险来源说明；同步修正设计文档脚注（v0.4/四轮） | 审查结论 |
 | 2026-08-05 | P0 完成 | **P0.1–P0.3 全部完成**（见任务表）；Go 1.26.5 安装于 `~/.local/go`（go.dev 大文件被网络干扰，改用阿里云镜像），模块代理 goproxy.cn；首次提交 475460a | 用户批准启动 |
 | 2026-08-05 | 设计 v0.5：**存储改为分目录 JSON/JSONL**（用户评审决议，替代 SQLite）——按语义分片（响应按 audit 为 JSONL 追加）、原子写、幂等内存去重、证据链 append-only+sha256、schema_version 校验、导入导出天然；设计文档 §4/§2/§10/§15 与 AGENTS.md §4 同步 | 用户评审意见（远程仓库 + 存储讨论） |
+| 2026-08-05 | **设计 v0.6**：M1.3 实现后的接口契约演进——§2.1 fingerprint 签名更新为 `Distance(a, b *Fingerprint) (float64, int)`（返回参与 cell 数支撑 k_min 判定）、§3.3 明确 T0 变体距离语义（门槛双方 ≥1、辅助信号不入判定主路径） | 审查结论（需求符合性：接口契约留痕） |
 
 ---
 
@@ -144,6 +145,8 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 | 2026-08-05 | **M1.1 七轮审查修复**：sanitize Windows 保留名/非法字符/NUL、原子写统一 0644+目录 fsync、Save 复制入参、JSONL 行号错误、往返测试改 DeepEqual、schema 拒绝参数化、导入导出增强、并发追加测试；config 移除 ONETOKEN_DB 死代码；设计 §4.2 JSONL 版本豁免；文档 v0.4 残留清理（实施计划头部/P0.2/P0.3/M4.3、AGENTS.md）——36 单测全绿（含 -race） | 助手 |
 | 2026-08-05 | **M1.2 完成**：preprocess 归一化+分类（NFC/数字映射含中文数词解析/四语言拒绝/颜色硬币词表/多词判定）；21 单测；累计 57 全绿（含 -race） | 助手 |
 | 2026-08-05 | **M1.2 八轮审查修复**：multi-word 判定移至词表折叠之前（防 "blue sky" 放行）、refusal 英文词边界正则（vacant/lubricant 不再误报）、俄语 navy 无连字符变体、中文数词亿万分段文法（一万亿/一亿五千万）、refusal 模式扩充（لااستطيع/不知道/не знаю）、coin 补 head、颜色词表扩（单字中文色+高频色系归并）、小数/负号伪影与无空格中文整句文档化+测试；66 单测全绿（含 -race）；go.mod tidy（x/text 去 indirect） | 助手 |
+| 2026-08-05 | **M1.3 完成**：fingerprint 包（KL/JSD 基 2 原始标度/Normalize/Build/Distance/DistanceT0）；scipy 1.18.0 对拍黄金值（清华镜像安装，8 组案例平方后容差 1e-12）；11 新增单测；累计 77 全绿（含 -race） | 助手 |
+| 2026-08-05 | **M1.3 三视角审查修复**：正确性（退化输入语义文档化、多正温度静默合并→error、prob() key 生成、scipy 模块路径注释）、安全性（非法温度/超长 Normalized/空串 valid 防御、全零计数 dist 过滤、非有限 JSD 防线、NaN 传播快照测试）、需求符合性（Distance 签名与 T0 门槛设计文档留痕 v0.6）；新增 5 单测，累计 82 全绿（含 -race） | 助手 |
 
 ---
 
