@@ -1,0 +1,42 @@
+# OneToken 提供商配置模板。
+# 复制本文件为 config/providers.yaml 后按需填写。
+# 密钥一律通过环境变量引用（api_key_env），永不写入本文件。
+#
+# base_url 语义（设计文档 §6.1）：协议根，【不含】/v1 路径段，
+# provider 层统一拼接 /v1/responses、/v1/chat/completions、/v1/messages。
+#
+# protocol: auto | responses | chat | anthropic
+#   auto  = 按域名特征初判 + 能力探测协商（失败中止，不静默换协议）
+
+providers:
+  - name: openrouter
+    base_url: https://openrouter.ai
+    api_key_env: OPENROUTER_API_KEY
+    protocol: auto
+    limits:
+      rpm: 100            # 每分钟请求上限；0 = 不限
+      rpd: 5000           # 每日请求上限；0 = 不限
+      max_concurrency: 8  # 并发上限（默认 4–8，本地通道可更高）
+      timeout_s: 60
+    # headers:            # 可选附加头
+    #   HTTP-Referer: "https://example.com"
+
+  - name: local-qwen
+    base_url: http://localhost:8000
+    api_key_env: LOCAL_API_KEY
+    protocol: chat         # vLLM 走 OpenAI chat 兼容
+    limits:
+      rpm: 0
+      rpd: 0
+      max_concurrency: 16  # 本地不限流，可高于默认
+      timeout_s: 120
+
+  - name: anthropic
+    base_url: https://api.anthropic.com
+    api_key_env: ANTHROPIC_API_KEY
+    protocol: anthropic
+    limits:
+      rpm: 50
+      rpd: 2000
+      max_concurrency: 4
+      timeout_s: 60

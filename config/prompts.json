@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "system_prompt": "Answer with a single word or number only. Do not add any explanation.",
+  "languages": ["en", "ru", "zh", "ar"],
+  "tasks": [
+    {
+      "id": "random_number_100",
+      "answer_space": "closed",
+      "space_size": 100,
+      "prompts": {
+        "en": "Name a random number between 1 and 100.",
+        "ru": "Назови случайное число от 1 до 100.",
+        "zh": "说出一个 1 到 100 之间的随机数。",
+        "ar": "اذكر رقمًا عشوائيًا بين 1 و 100."
+      }
+    },
+    {
+      "id": "random_number_10",
+      "answer_space": "closed",
+      "space_size": 10,
+      "prompts": {
+        "en": "Name a random number between 1 and 10.",
+        "ru": "Назови случайное число от 1 до 10.",
+        "zh": "说出一个 1 到 10 之间的随机数。",
+        "ar": "اذكر رقمًا عشوائيًا بين 1 و 10."
+      }
+    },
+    {
+      "id": "favorite_number",
+      "answer_space": "open",
+      "prompts": {
+        "en": "What is your favorite number?",
+        "ru": "Какое у тебя любимое число?",
+        "zh": "你最喜欢的数字是什么？",
+        "ar": "ما هو رقمك المفضل؟"
+      }
+    },
+    {
+      "id": "random_letter",
+      "answer_space": "closed",
+      "space_size": 26,
+      "prompts": {
+        "en": "Name a random letter.",
+        "ru": "Назови случайную букву.",
+        "zh": "说出一个随机的字母。",
+        "ar": "اذكر حرفًا عشوائيًا."
+      }
+    },
+    {
+      "id": "random_word",
+      "answer_space": "open",
+      "prompts": {
+        "en": "Name a random word.",
+        "ru": "Назови случайное слово.",
+        "zh": "说出一个随机的词。",
+        "ar": "اذكر كلمة عشوائية."
+      }
+    },
+    {
+      "id": "random_color",
+      "answer_space": "open",
+      "prompts": {
+        "en": "Name a random color.",
+        "ru": "Назови случайный цвет.",
+        "zh": "说出一个随机的颜色。",
+        "ar": "اذكر لونًا عشوائيًا."
+      }
+    },
+    {
+      "id": "favorite_color",
+      "answer_space": "open",
+      "prompts": {
+        "en": "What is your favorite color?",
+        "ru": "Какой у тебя любимый цвет?",
+        "zh": "你最喜欢的颜色是什么？",
+        "ar": "ما هو لونك المفضل؟"
+      }
+    },
+    {
+      "id": "random_animal",
+      "answer_space": "open",
+      "prompts": {
+        "en": "Name a random animal.",
+        "ru": "Назови случайное животное.",
+        "zh": "说出一个随机的动物。",
+        "ar": "اذكر حيوانًا عشوائيًا."
+      }
+    },
+    {
+      "id": "random_city",
+      "answer_space": "open",
+      "prompts": {
+        "en": "Name a random city.",
+        "ru": "Назови случайный город.",
+        "zh": "说出一个随机的城市。",
+        "ar": "اذكر مدينة عشوائية."
+      }
+    },
+    {
+      "id": "coin_flip",
+      "answer_space": "closed",
+      "space_size": 2,
+      "prompts": {
+        "en": "Flip a coin: heads or tails?",
+        "ru": "Подбрось монету: орёл или решка?",
+        "zh": "抛一枚硬币：正面还是反面？",
+        "ar": "اقلب عملة: صورة أم كتابة؟"
+      }
+    }
+  ]
+}
