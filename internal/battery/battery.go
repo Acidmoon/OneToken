@@ -21,9 +21,9 @@ const taskCount = 10
 // Task 描述一个探针任务。
 type Task struct {
 	ID          string            `json:"id"`
-	AnswerSpace string            `json:"answer_space"`           // closed | open
-	SpaceSize   int               `json:"space_size,omitempty"`   // closed 空间大小
-	Prompts     map[string]string `json:"prompts"`                // lang -> 用户提示
+	AnswerSpace string            `json:"answer_space"`         // closed | open
+	SpaceSize   int               `json:"space_size,omitempty"` // closed 空间大小
+	Prompts     map[string]string `json:"prompts"`              // lang -> 用户提示
 }
 
 // Battery 是 40-cell 电池的加载结果。

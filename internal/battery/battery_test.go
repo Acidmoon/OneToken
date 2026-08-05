@@ -110,9 +110,9 @@ func TestValidateRejectsLangDrift(t *testing.T) {
 
 func TestValidateRejectsInterpolation(t *testing.T) {
 	cases := []struct {
-		name  string
-		mut   func(*Battery)
-		kw    string
+		name string
+		mut  func(*Battery)
+		kw   string
 	}{
 		{"模板占位符", func(b *Battery) { b.Tasks[0].Prompts["en"] = "say {{model}}" }, "占位符"},
 		{"裸美元变量", func(b *Battery) { b.Tasks[0].Prompts["en"] = "say $model" }, "变量"},

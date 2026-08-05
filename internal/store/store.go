@@ -35,10 +35,10 @@ const (
 
 // Classification 枚举（设计 §3.2）。
 const (
-	ClassValid      = "valid"
-	ClassInvalid    = "invalid"
-	ClassRefusal    = "refusal"
-	ClassEmpty      = "empty"
+	ClassValid   = "valid"
+	ClassInvalid = "invalid"
+	ClassRefusal = "refusal"
+	ClassEmpty   = "empty"
 )
 
 // --- 类型定义（对应设计 §4.3 文件结构） ---
@@ -66,7 +66,7 @@ type CellDist struct {
 type Fingerprint struct {
 	SchemaVersion int                 `json:"schema_version"`
 	ModelID       string              `json:"model_id"`
-	Version       string              `json:"version"` // e.g. 2026-07-11v1
+	Version       string              `json:"version"`      // e.g. 2026-07-11v1
 	CollectedAt   string              `json:"collected_at"` // UTC Z
 	RefSource     string              `json:"ref_source"`
 	Cells         map[string]CellDist `json:"cells"` // "task:lang" -> 分布
@@ -170,8 +170,8 @@ type calibrationsFile struct {
 }
 
 type driftFile struct {
-	SchemaVersion int           `json:"schema_version"`
-	Entries       []DriftEntry  `json:"entries"`
+	SchemaVersion int          `json:"schema_version"`
+	Entries       []DriftEntry `json:"entries"`
 }
 
 // --- Store ---
@@ -201,9 +201,9 @@ func (s *Store) Root() string { return s.root }
 
 // --- 路径 ---
 
-func (s *Store) modelsPath() string        { return filepath.Join(s.root, "models.json") }
-func (s *Store) calibrationsPath() string  { return filepath.Join(s.root, "calibrations.json") }
-func (s *Store) driftPath() string         { return filepath.Join(s.root, "drift.json") }
+func (s *Store) modelsPath() string       { return filepath.Join(s.root, "models.json") }
+func (s *Store) calibrationsPath() string { return filepath.Join(s.root, "calibrations.json") }
+func (s *Store) driftPath() string        { return filepath.Join(s.root, "drift.json") }
 func (s *Store) fingerprintPath(id string) string {
 	return filepath.Join(s.root, "fingerprints", sanitize(id)+".json")
 }

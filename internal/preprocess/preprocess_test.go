@@ -22,9 +22,9 @@ var (
 
 func TestNormalizeArabicIndicDigits(t *testing.T) {
 	cases := map[string]string{
-		"٤٢":        "42",
+		"٤٢":         "42",
 		"٠١٢٣٤٥٦٧٨٩": "0123456789",
-		"۴۲":        "42", // 波斯-印度
+		"۴۲":         "42", // 波斯-印度
 	}
 	for in, want := range cases {
 		if got := Normalize(in); got != want {
@@ -35,15 +35,15 @@ func TestNormalizeArabicIndicDigits(t *testing.T) {
 
 func TestNormalizeChineseNumbers(t *testing.T) {
 	cases := map[string]string{
-		"四十二": "42",
-		"一二三": "123",
-		"十":   "10",
-		"二十": "20",
+		"四十二":  "42",
+		"一二三":  "123",
+		"十":    "10",
+		"二十":   "20",
 		"一百零五": "105",
-		"七":   "7",
-		"零":   "0",
-		"两百":  "200",
-		"十万":  "100000",
+		"七":    "7",
+		"零":    "0",
+		"两百":   "200",
+		"十万":   "100000",
 	}
 	for in, want := range cases {
 		if got := Normalize(in); got != want {
@@ -67,14 +67,14 @@ func TestNormalizeNFC(t *testing.T) {
 
 func TestNormalizeStripsPunctQuotes(t *testing.T) {
 	for in, want := range map[string]string{
-		`"42"`:    "42",
-		"42.":     "42",
-		"42，":     "42",
-		"(42)":    "42",
-		"42!":     "42",
-		"'blue'":  "blue",
-		"red;":    "red",
-		"1,000":   "1000", // 千分位逗号
+		`"42"`:   "42",
+		"42.":    "42",
+		"42，":    "42",
+		"(42)":   "42",
+		"42!":    "42",
+		"'blue'": "blue",
+		"red;":   "red",
+		"1,000":  "1000", // 千分位逗号
 	} {
 		if got := Normalize(in); got != want {
 			t.Fatalf("Normalize(%q) = %q，期望 %q", in, got, want)
@@ -397,10 +397,10 @@ func TestNoSpaceChineseSentence(t *testing.T) {
 
 func TestChineseToDigitsLarge(t *testing.T) {
 	for in, want := range map[string]string{
-		"一万亿":     "1000000000000",
-		"一亿五千万":  "150000000",
-		"十万亿":     "10000000000000",
-		"一亿":      "100000000",
+		"一万亿":   "1000000000000",
+		"一亿五千万": "150000000",
+		"十万亿":   "10000000000000",
+		"一亿":    "100000000",
 	} {
 		if got := ChineseToDigits(in); got != want {
 			t.Fatalf("ChineseToDigits(%q) = %q，期望 %q", in, got, want)

@@ -232,4 +232,3 @@ func TestBindCheckUnknownDomainWarns(t *testing.T) {
 		t.Fatal("非知名域 + 密钥应给出宽松告警")
 	}
 }
-
