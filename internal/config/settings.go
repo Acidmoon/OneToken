@@ -1,10 +1,5 @@
 package config
 
-import (
-	"os"
-	"path/filepath"
-)
-
 // Settings 集中全部阈值/规则/采样参数（设计文档 §3.1、§5、§12）。
 // 所有魔法数字集中于此，代码引用配置而非常量。
 type Settings struct {
@@ -30,8 +25,9 @@ type Settings struct {
 	DriftBaseline float64 // 参考噪声底线（论文：0.140）
 	DriftWindow   int     // 趋势窗口（近 N 次）
 
-	// 存储（设计 §15.4）
-	DBPath string // SQLite 路径
+	// 存储
+	// data 目录由 store.DefaultRoot 管理（ONETOKEN_DATA 覆盖，默认 ~/.onetoken/data/），
+	// 不在 Settings 中重复定义（v0.5 JSON 存储决议）。
 }
 
 // DefaultSettings 返回阈值/采样参数默认值（集中配置的基准）。
@@ -55,23 +51,9 @@ func DefaultSettings() Settings {
 
 		DriftBaseline: 0.140,
 		DriftWindow:   5,
-
-		DBPath: defaultDBPath(),
 	}
 }
 
-// ApplyEnv 用环境变量覆盖部分设置（当前：ONETOKEN_DB 覆盖 db 路径）。
-func (s *Settings) ApplyEnv() {
-	if v := os.Getenv("ONETOKEN_DB"); v != "" {
-		s.DBPath = v
-	}
-}
-
-// defaultDBPath 返回 ~/.onetoken/onetoken.db。
-func defaultDBPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "onetoken.db"
-	}
-	return filepath.Join(home, ".onetoken", "onetoken.db")
-}
+// ApplyEnv 用环境变量覆盖部分设置（预留扩展；当前无覆盖项，
+// data 目录路径由 store.DefaultRoot 的 ONETOKEN_DATA 负责）。
+func (s *Settings) ApplyEnv() {}

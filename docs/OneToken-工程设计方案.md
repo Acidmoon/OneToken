@@ -2,10 +2,11 @@
 
 > **依据论文**：《One Token Is Enough: Fingerprinting and Verifying Large Language Models from Single-Token Output Distributions》（arXiv:2607.10252，Tomáš Bruckner）
 >
-> **文档状态**：v0.4（已并入用户评审意见 + 四轮对抗式审查结论）
+> **文档状态**：v0.5（已并入用户评审意见 + 五轮对抗式审查结论）
 > **决策记录**：
 > - 实现语言：**Go**（IO 密集场景，启动毫秒级、单二进制、goroutine 并发天然适配批量采集；开发/迭代快）——用户拍板。
 > - **统一提供商调用层为系统核心**：任意 BaseURL + API Key 即可请求，三种协议适配（OpenAI Responses / OpenAI chat completions 兼容 / Anthropic messages），参考注册（enroll）与待审核模型（audit）共用此层——用户评审意见 1。
+> - **存储：分目录 JSON/JSONL 文件存储，替代 SQLite**（用户评审决议 v0.5）——单用户 CLI、数据按语义分片、导入导出与开放共享；响应按审计分片为 JSONL 追加，避免单大文件全量读写；详见 §4。
 > - 参考指纹通道：能力层双通道——开源模型本地部署（LocalHost）与厂商官方 API（OfficialAPI）；每模型默认按类型选单一通道（开源→本地优先，闭源→官方 API），同模型双源交叉校验为可选配置（§7.5）。
 > - 首个试点目标：本地部署 Qwen3-8B 建档 → OpenRouter 同名端点审计（§9.2）。
 > - 操作点：默认误报优先（τ 对应 FPR≈1%），附 τ_fpr5 辅评估点；阈值按 (k, n, 通道) 分档存储（§3.4、§4）。
@@ -66,7 +67,7 @@
        │                │             │              │              │
        ▼                ▼             ▼              ▼              ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│                     store/（SQLite，modernc 纯 Go，WAL 模式）               │
+│                     store/（JSON/JSONL 文件存储，原子写）                  │
 │  responses / fingerprints / audits / calibrations / models / drift         │
 └───────────────▲──────────────────────────────────────────────────────────┘
                 │ 统一调用：所有参考源与目标端点都经此层
@@ -97,7 +98,7 @@
 | `internal/verify` | 判定：JSD vs τ（按 (k,n,通道) 匹配校准库），含 inconclusive 缓冲 | `Verify(ctx, target Provider, claimed Fingerprint, k, n) → Verdict` |
 | `internal/calibrate` | genuine/impostor 试验、ROC/AUC/EER、bootstrap CI、(k,n,通道) 分档（M1 范围）；1-NN（§3.5，v1.2）/UPGMA/ARI（报告，v1.1）为后续里程碑 | `Calibrate(store) → CalibrationReport` |
 | `internal/reporter` | 距离矩阵、聚类图（v1.1）、单端点报告、告警；**Go `html/template` 默认转义防 XSS** | `Report(auditID) → md/html` |
-| `internal/store` | SQLite 数据层：modernc 纯 Go 驱动、`PRAGMA foreign_keys=ON + WAL + busy_timeout`、批量事务、索引、迁移 | CRUD + 事务 |
+| `internal/store` | JSON/JSONL 文件存储：目录布局（§4.1）、原子写（tmp+rename）、JSONL 追加、幂等去重索引、证据链（append-only + raw_sha256）、schema_version 校验 | SaveAudit / AppendResponse / LoadResponses / SaveFingerprint / ... |
 | `internal/config` | 配置加载（YAML/环境变量），密钥用不可序列化类型；**所有阈值/规则集中配置** | `Load(path) → Config` |
 | `cmd/onetoken` | CLI 入口（cobra）：enroll/audit/calibrate/probe/report/drift | `main.go` |
 
@@ -117,7 +118,7 @@ audit 阶段（高频，如每日）：
     → verify/（指纹距离 vs τ） → Verdict{pass|suspicious|inconclusive} → store/ + reporter/ 告警
 ```
 
-**流水线顺序约束**（避免依赖环）：`normalize → classify → screen(detector) → dist/JSD/verdict(verify)`。preprocess 独立，verify 只做分布+距离+判定；raw 行只 INSERT 不 UPDATE（取证语义），派生列由 preprocess 一次性写入。
+**流水线顺序约束**（避免依赖环）：`normalize → classify → screen(detector) → dist/JSD/verdict(verify)`。preprocess 独立，verify 只做分布+距离+判定；responses JSONL 只追加不修改（取证语义），派生列（normalized/classification）由 preprocess 一次性写入。
 
 ---
 
@@ -175,119 +176,99 @@ Unicode NFC → 剥离标点/引号 → 大小写折叠 → 阿拉伯-印度/中
 
 ---
 
-## 4. 数据模型（SQLite schema 草案）
+## 4. 数据模型（JSON/JSONL 文件存储）
 
-**store 层约定（连接建立时统一执行）**：`PRAGMA foreign_keys=ON`（SQLite 默认不强制外键）、`journal_mode=WAL`、`busy_timeout=5000`；时间戳统一 `YYYY-MM-DDTHH:MM:SSZ`（强制 Z 后缀保证字典序）；批量插入走事务；modernc 纯 Go 驱动（无 CGO，交叉编译友好）。
+**存储形态（用户评审决议，v0.5）**：分目录 JSON/JSONL，替代 SQLite。理由：单用户 CLI、数据按语义天然分片、导入导出与开放共享（论文精神）、避免单大文件的全量读写与并发陷阱。响应数据按审计分片为 JSONL 追加文件（O(1) 写入），不随数据量增长而全量重写。
 
-```sql
--- 模型目录：所有被管理/被验证的模型
-CREATE TABLE models (
-  id            TEXT PRIMARY KEY,          -- e.g. qwen/qwen3-8b
-  vendor        TEXT,
-  family        TEXT,                      -- 家族标签（qwen/gpt/llama/...）
-  model_type    TEXT CHECK (model_type IN ('open-source','proprietary')),
-  ref_source    TEXT CHECK (ref_source IN ('local','official-api','none')),
-  catalog_snapshot TEXT,                   -- 采集时目录标识（如 2026-07-06）
-  notes         TEXT
-);
+### 4.1 目录布局
 
--- 指纹版本（参考指纹可被刷新，保留历史）
-CREATE TABLE fingerprints (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  model_id      TEXT NOT NULL REFERENCES models(id),
-  version       TEXT,                      -- e.g. 2026-07-11v1
-  collected_at  TEXT,                      -- UTC ISO (Z 后缀)
-  ref_source    TEXT,
-  cells_json    TEXT,                      -- { "task:lang": {"dist": {...}, "n": 30, "T": 1.0, "valid_rate": 0.99} } 含 schema_version
-  t0_cells_json TEXT,                      -- T=0 确定性变体
-  qc_flags      TEXT,
-  superseded_by INTEGER REFERENCES fingerprints(id),
-  UNIQUE (model_id, version)
-);
-
--- 原始响应（证据链；raw 行只 INSERT 不 UPDATE）
-CREATE TABLE responses (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  fingerprint_id INTEGER REFERENCES fingerprints(id),
-  audit_id      INTEGER REFERENCES audits(id),
-  cell          TEXT,                      -- "task:lang"
-  sample_idx    INTEGER,                   -- 每 cell 内重复序号 0..n-1（幂等键组成）
-  temperature   REAL,
-  prompt_hash   TEXT,
-  raw_completion TEXT,
-  raw_hash      TEXT,                      -- sha256(raw_completion)，证据防篡改
-  normalized    TEXT,                      -- 派生列，preprocess 一次性写入
-  classification TEXT CHECK (classification IN ('valid','invalid','refusal','empty')),
-  reasoning_tokens INTEGER,                -- 协议层透传（responses 显式；chat/anthropic 为 0 或空）
-  latency_ms    INTEGER,
-  provider      TEXT,
-  reported_model TEXT,
-  usage_json    TEXT,                      -- token 用量（含 cache 计数，协议差异已归一）
-  cost_usd      REAL,
-  ts_utc        TEXT,
-  CHECK (fingerprint_id IS NOT NULL OR audit_id IS NOT NULL)
-  -- 幂等去重改用表后两条部分唯一索引：SQLite 的 UNIQUE 对 NULL 互不相等，整表级约束对 enroll(audit_id NULL)/audit(fingerprint_id NULL) 行完全无效
-);
-CREATE UNIQUE INDEX idx_resp_idem_audit ON responses(audit_id, cell, sample_idx) WHERE audit_id IS NOT NULL;
-CREATE UNIQUE INDEX idx_resp_idem_fp ON responses(fingerprint_id, cell, sample_idx) WHERE fingerprint_id IS NOT NULL;
-CREATE INDEX idx_resp_audit ON responses(audit_id);
-CREATE INDEX idx_resp_fp ON responses(fingerprint_id);
-
--- 审计结果
-CREATE TABLE audits (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  endpoint      TEXT,                      -- base_url + model string
-  claimed_model TEXT REFERENCES models(id),
-  ref_fingerprint_id INTEGER REFERENCES fingerprints(id),
-  k_cells       INTEGER,
-  n_per_cell    INTEGER,
-  selected_cells_json TEXT,                -- 本次随机选中的 cell 集合 + 随机种子（可复现）
-  score         REAL,                      -- mean JSD
-  threshold     REAL,                      -- 所用 τ
-  threshold_scope TEXT,                    -- 档位标识：global | family:<x> | size-tier（与 calibrations 分档对应）
-  verdict       TEXT CHECK (verdict IN ('pending','pass','suspicious','inconclusive','error')),  -- pending：预检阶段先行建行
-  cells_detail_json TEXT,                  -- 逐 cell JSD 明细（含 schema_version）
-  qc_flags      TEXT,
-  audited_at    TEXT
-  -- 同日去重：SQLite 表级 UNIQUE 不支持 date(audited_at) 表达式，改用独立索引；
-  -- 若 ref_fingerprint_id 允许 NULL，该索引受 NULL 语义影响，需部分索引
-);
-CREATE UNIQUE INDEX idx_audits_daily ON audits(endpoint, claimed_model, ref_fingerprint_id, date(audited_at));
-CREATE INDEX idx_audits_endpoint ON audits(endpoint, audited_at);
-CREATE INDEX idx_audits_model ON audits(claimed_model, audited_at);
-
--- 校准（阈值按 (k,n,通道) 分档存储）
-CREATE TABLE calibrations (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  scope         TEXT,                      -- global | family:<x> | size-tier
-  k_cells       INTEGER,
-  n_per_cell    INTEGER,
-  ref_channel   TEXT,                      -- local | official-api
-  target_channel TEXT,                     -- local | aggregator | official-api | unknown
-  genuine_n     INTEGER,
-  impostor_n    INTEGER,
-  auc           REAL,
-  eer           REAL,
-  tau_fpr1      REAL,
-  tau_fpr1_tpr  REAL,                      -- τ_fpr1 处的 TPR 估计
-  tpr_ci_json   TEXT,                      -- bootstrap CI
-  tau_fpr5      REAL,
-  roc_json      TEXT,                      -- 含 schema_version
-  calibrated_at TEXT,
-  UNIQUE (scope, k_cells, n_per_cell, ref_channel, target_channel)
-);
-
--- 漂移监控
-CREATE TABLE drift (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  model_id      TEXT NOT NULL REFERENCES models(id),
-  ref_fingerprint_id INTEGER NOT NULL REFERENCES fingerprints(id),
-  audit_id      INTEGER REFERENCES audits(id),
-  score_trend_json TEXT,                   -- 近 N 次得分（含 schema_version）
-  flag          TEXT CHECK (flag IN ('ok','rising','stale'))
-);
-CREATE INDEX idx_drift_model ON drift(model_id);
+```text
+data/                              # 根目录可配置（默认 ~/.onetoken/data/，ONETOKEN_DATA 覆盖）
+├── models.json                    # 模型目录（全量，小）
+├── calibrations.json              # 校准结果，按 (scope,k,n,通道) 分档（全量，小）
+├── drift.json                     # 漂移趋势（全量，小）
+├── fingerprints/
+│   └── <model_id>.json            # 每模型一文件（含版本链 superseded_by）
+├── audits/
+│   └── <audit_id>.json            # 每次审计一文件（结果+元数据）
+└── responses/
+    └── <audit_id>.jsonl           # 本次审计响应，JSONL 追加（只增不改）
 ```
+
+### 4.2 一致性约定（替代原 DB 约束）
+
+| 原 DB 能力 | JSON 替代实现 |
+|---|---|
+| 外键/CHECK 约束 | 应用层校验 + schema_version 校验；model/audit 引用为**弱关联**（审计/指纹文件保留快照字段，不强引用，便于导出分享） |
+| 幂等去重（部分唯一索引） | 响应按 `cell+sample_idx` 内存 map 去重：重跑审计时读回本次 `responses/<id>.jsonl` 建索引 |
+| 事务/原子性 | **原子写**：所有整文件写入走 临时文件 + `os.Rename`（同目录，POSIX 原子）；JSONL 用 `O_APPEND` 单行追加 |
+| 证据链（raw 只增不改） | JSONL **只追加不修改**；每条响应含 `raw_sha256` 可校验；审计/指纹文件整写，内含快照字段 |
+| 索引查询 | 不需要——数据按语义分片（按 audit_id / model_id 取文件） |
+| 并发 | 原子写 + 可选 `flock`（不同 audit 写不同文件，冲突面极小；单进程 CLI 场景足够） |
+
+时间戳统一 `YYYY-MM-DDTHH:MM:SSZ`（强制 Z 后缀保证字典序）。**所有整文件 JSON 顶层含 `schema_version`，读取时校验（不匹配拒绝加载）**；JSONL 行（responses）为追加日志，豁免版本字段——行格式由 `raw_sha256` 与行结构约束（版本演进走字段兼容）。
+
+### 4.3 文件结构
+
+**models.json**：`{ "schema_version": 1, "models": [ {id, vendor, family, model_type, ref_source, catalog_snapshot, notes} ] }`
+
+**fingerprints/<model_id>.json**：
+
+```json
+{
+  "schema_version": 1,
+  "model_id": "qwen/qwen3-8b",
+  "version": "2026-07-11v1",
+  "collected_at": "2026-08-05T00:00:00Z",
+  "ref_source": "local",
+  "cells": { "random_number_100:en": { "dist": {"42": 12, "57": 6}, "n": 30, "t": 1.0, "valid_rate": 0.99 } },
+  "t0_cells": { "random_number_100:en": { "dist": {"42": 3}, "n": 3, "t": 0.0 } },
+  "qc_flags": [],
+  "superseded_by": ""
+}
+```
+
+（dist 为原始计数，归一化在 fingerprint 计算层完成；每 cell 的 n 记录实际有效样本数）
+
+**audits/<audit_id>.json**：
+
+```json
+{
+  "schema_version": 1,
+  "id": "<audit_id>",
+  "endpoint": "base_url + model string",
+  "claimed_model": "openai/gpt-5.1",
+  "ref_fingerprint_version": "2026-07-11v1",
+  "k": 8, "n": 15,
+  "selected_cells": ["random_number_100:en"],
+  "seed": 12345,
+  "score": 0.18,
+  "threshold": 0.15, "threshold_scope": "global",
+  "verdict": "pass",
+  "cells_detail": { "random_number_100:en": 0.12 },
+  "qc_flags": [],
+  "audited_at": "2026-08-05T00:00:00Z"
+}
+```
+
+（预检阶段先建 pending 状态的审计文件，再采集写响应，最后更新 verdict；verdict ∈ pending|pass|suspicious|inconclusive|error）
+
+**responses/<audit_id>.jsonl**（每行一个响应对象，只追加）：
+
+```json
+{ "cell": "random_number_100:en", "sample_idx": 3, "temperature": 1.0,
+  "prompt_hash": "...", "raw_completion": "42", "raw_sha256": "...",
+  "normalized": "42", "classification": "valid",
+  "reasoning_tokens": 0, "finish_reason": "stop",
+  "latency_ms": 812, "provider": "upstream-x", "reported_model": "gpt-5.1",
+  "usage": {}, "cost_usd": 0.0001, "ts": "2026-08-05T00:00:00Z" }
+```
+
+**calibrations.json**：`{ "schema_version": 1, "calibrations": [ {scope, k, n, ref_channel, target_channel, genuine_n, impostor_n, auc, eer, tau_fpr1, tau_fpr1_tpr, tpr_ci, tau_fpr5, roc, calibrated_at} ] }`
+
+**drift.json**：`{ "schema_version": 1, "entries": [ {model_id, ref_fingerprint_version, audit_id, scores, flag, updated_at} ] }`
+
+**导入导出**：按语义分文件的 JSON 直接拷贝/分享即导出（与论文数据开放精神一致）；响应 JSONL 可与 CSV 互转；全库导出 = 打包 data/ 目录。
 
 ---
 
@@ -452,7 +433,7 @@ onetoken drift --model qwen/qwen3-8b
 #   密钥仍走环境变量引用，不落盘、不进日志。
 
 # 性能特征（口径说明）：
-# --help 与配置加载 <50ms（冷启动：含 DB 打开与幂等迁移）；
+# --help 与配置加载 <50ms（冷启动：含 data 目录初始化）；
 # 120 查询审计典型 3–20s（网络主导：8 并发下 120÷8=15 波 × 单请求 0.3–1.5s；<2s 仅本地 vLLM 可达；不含重试/退避与 T=0 预检）
 ```
 
@@ -507,7 +488,7 @@ onetoken drift --model qwen/qwen3-8b
 |---|---|---|
 | 语言 | Go 1.22+ | 启动毫秒级、单二进制、goroutine 并发适配批量采集；IO 密集场景下性能与 Rust 同级，开发/迭代快（用户拍板） |
 | HTTP | 标准库 `net/http`：自定义 `Transport`（连接池、超时、DialContext）+ `http.Client` | 无重框架；**禁用重定向需显式配置**（默认是跟随最多 10 次）：`CheckRedirect: func(...) error { return http.ErrUseLastResponse }`，位置在 `http.Client` 而非 `Transport` |
-| 存储 | `modernc.org/sqlite`（纯 Go，无 CGO） | WAL + 外键 + busy_timeout；交叉编译友好；**pin 具体版本并核对 go.mod 的 go 指令与工具链匹配**（各版本对 Go 最低版本要求不同）；迁移 PostgreSQL 需重写存储层（PRAGMA/JSON 文本列不自动移植），非自动升级 |
+| 存储 | 标准库 `encoding/json` + 文件系统（分目录 JSON/JSONL，§4） | 原子写 tmp+rename；JSONL 追加 O(1)；无第三方依赖；schema_version 兼容校验；导入导出天然 |
 | CLI | `spf13/cobra` | 子命令体系（enroll/audit/…）；`--help` 毫秒级 |
 | 配置 | YAML + 环境变量（密钥） | 所有阈值/规则进配置，不硬编码；密钥类型禁止序列化进日志/报告 |
 | 日志 | 标准库 `log/slog`（结构化） | 脱敏：Authorization 头、密钥字段永不输出 |
@@ -582,7 +563,7 @@ onetoken/
 │   ├── fingerprint/            # 分布、基 2 JSD
 │   ├── verify/                 # 判定（含 inconclusive 缓冲）
 │   ├── calibrate/              # ROC/AUC/EER/bootstrap/1-NN/UPGMA/ARI
-│   ├── store/                  # SQLite（modernc）
+│   ├── store/                  # JSON/JSONL 文件存储（原子写/幂等/证据链）
 │   └── report/                 # 报告（html/template 转义）
 ├── config/
 │   ├── prompts.json            # 40 cell 提示词（模板与配置分离）
@@ -595,7 +576,7 @@ onetoken/
 
 ## 15. 部署与运维（OneToken 自身）
 
-1. **构建与分发**：`go build ./cmd/onetoken` 产出单二进制；交叉编译 `GOOS=windows|linux|darwin`（modernc 无 CGO，全平台可编译）；发布到 PATH 即可用；
+1. **构建与分发**：`go build ./cmd/onetoken` 产出单二进制；交叉编译 `GOOS=windows|linux|darwin`（纯标准库依赖，全平台可编译）；发布到 PATH 即可用；
 2. **配置清单**：`config/providers.yaml`（无密钥模板）+ 环境变量注入密钥 + `config/prompts.json`；提示词模板与配置分离，生成时插值校验防注入；
 3. **调度示例**（cron，UTC）：
 
@@ -605,9 +586,9 @@ onetoken/
    0 4 1 * *   onetoken calibrate --scope global --recompute
    ```
 
-4. **数据落盘**：SQLite 文件路径可配置（默认 `~/.onetoken/onetoken.db`）；**备份**：每日备份 db + 校验和（证据链用途）；迁移：schema 变更走迁移脚本（JSON 字段含 `schema_version`）；
+4. **数据落盘**：`data/` 目录可配置（默认 `~/.onetoken/data/`，`ONETOKEN_DATA` 覆盖）；**备份**：每日打包 `data/` 目录 + 校验和（证据链用途）；**恢复**：解包即恢复——无迁移脚本，仅校验各文件 `schema_version` 兼容；
 5. **日志与审计追踪**：结构化日志（secret 脱敏），审计运行日志可追溯；报告文件按敏感级标注（含端点 URL、延迟、成本，共享时注意泄露运营信息）；
-6. **升级路径**：SQLite → PostgreSQL（`database/sql` 接口抽象）；CLI → REST 风格 HTTP 服务（v2，鉴权；Go 侧 `net/http`）。
+6. **升级路径**：数据格式变更走 `schema_version` 兼容校验（读旧写新，文件级迁移）；CLI → REST 风格 HTTP 服务（v2，鉴权；Go 侧 `net/http`）。
 
 ---
 
@@ -626,4 +607,4 @@ onetoken/
 
 ---
 
-*本文档依据论文 arXiv:2607.10252 的协议与数据设计；v0.4 已并入用户评审意见（统一提供商调用层、Go 性能选型）与四轮对抗式审查结论。*
+*本文档依据论文 arXiv:2607.10252 的协议与数据设计；v0.5 已并入用户评审意见（统一提供商调用层、Go 性能选型、JSON/JSONL 存储）与五轮对抗式审查结论。*

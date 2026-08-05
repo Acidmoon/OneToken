@@ -233,11 +233,3 @@ func TestBindCheckUnknownDomainWarns(t *testing.T) {
 	}
 }
 
-func TestApplyEnvOverridesDBPath(t *testing.T) {
-	t.Setenv("ONETOKEN_DB", "/tmp/test-onetoken.db")
-	s := DefaultSettings()
-	s.ApplyEnv()
-	if s.DBPath != "/tmp/test-onetoken.db" {
-		t.Fatalf("ONETOKEN_DB 覆盖失败: %s", s.DBPath)
-	}
-}

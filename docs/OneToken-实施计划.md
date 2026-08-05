@@ -1,6 +1,6 @@
 # OneToken 实施计划（任务拆分与状态跟踪）
 
-> **角色**：本文件是**项目进度的唯一真相**。设计依据见 `docs/OneToken-工程设计方案.md`（当前 v0.4），验收标准以设计文档为准，本文件负责把设计拆成可执行任务并跟踪状态。
+> **角色**：本文件是**项目进度的唯一真相**。设计依据见 `docs/OneToken-工程设计方案.md`（当前 v0.5），验收标准以设计文档为准，本文件负责把设计拆成可执行任务并跟踪状态。
 > **更新规则**：**每次完成任何实质性工作后必须更新本文件**（勾选状态、填日期与备注、按 AGENTS.md §3.1/§3.2 追加 §7 决策日志与 §8 更新日志）；收到反馈或评审意见后，先更新相关文档（本文件与设计文档），再动手改代码。规则详见 `AGENTS.md`。
 
 ---
@@ -15,7 +15,7 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 | 阶段 | 内容 | 设计文档依据 | 状态 |
 |---|---|---|---|
 | **P0** | Go 项目脚手架、配置骨架 | §10、§14 | ✅ 完成（2026-08-05） |
-| **M1** | store / preprocess / JSD / 校准 + Zenodo 论文复现 | §3.2、§3.3、§3.4、§4、§9.1 | ⬜ 待办 |
+| **M1** | 存储层（JSON/JSONL）/ preprocess / JSD / 校准 + Zenodo 论文复现 | §3.2、§3.3、§3.4、§4、§9.1 | ⬜ 待办 |
 | **M2** | 统一提供商调用层（三协议）+ 采集 + 探测 + 双通道参考 + 端到端审计 | §2、§5、§6、§7、§9.2 | ⬜ 待办 |
 | **M3** | 替换模拟实验 + 主辅操作点 + 报告模块 | §3.4、§9.3 | ⬜ 待办 |
 | **M4** | 调度 + 告警 + 漂移管理 + CLI 完整 + 长期验收 | §9.4、§12、§15 | ⬜ 待办 |
@@ -29,8 +29,8 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 | 任务 | 子步骤 | 依赖 | 验收 | 状态 |
 |---|---|---|---|---|
 | **P0.1** 初始化仓库与 Go 模块 | ① `git init` + `.gitignore`（含 `.env`、`*.db`、构建产物）；② `go.mod`（Go 1.22+，pin 依赖版本，注意 modernc.org/sqlite 对 Go 最低版本的要求）；③ 目录骨架 `cmd/onetoken` + `internal/{config,provider,battery,collector,preprocess,detector,fingerprint,verify,calibrate,store,report}` | 无 | `go build ./...` 通过；`.gitignore` 覆盖密钥与数据库 | ✅ 2026-08-05：git init + Go 1.26.5（安装于 `~/.local/go`，代理 goproxy.cn）+ 目录骨架 + 最小 main；首次提交 475460a |
-| **P0.2** 配置骨架 | ① `config/prompts.json`（40 cell 提示词模板，§3.1，与配置分离）；② `config/providers.yaml.example`（§6.1 格式：base_url 不含 `/v1`、`api_key_env` 引用、limits）；③ 迁移脚本骨架（幂等） | P0.1 | 配置可加载；模板插值校验防注入 | ✅ 2026-08-05：prompts.json 40 cell（10 任务×4 语言）+ providers 模板 + `internal/battery` 加载与防注入校验（5 单测）+ `internal/store/migrations.go` 骨架 |
-| **P0.3** 配置加载 | ① YAML + 环境变量（密钥不入文件）；② 所有阈值/规则集中配置（漂移底线 0.140、RPM/RPD、并发、超时、**db 路径默认 `~/.onetoken/onetoken.db`**）；③ **采集/审计采样参数默认值**：T=1.0 n=30、T=0 n=3、前沿（≥$5/1M 输入）n=15、审计 k∈{8,16}×n=15、输出上限 16 token（按协议命名映射 §6.2）、`store:false`；④ base_url↔密钥绑定校验骨架 | P0.2 | 单元测试：密钥禁止序列化进日志/报告；绑定校验告警；采样参数默认值断言 | ✅ 2026-08-05：`internal/config` 包（yaml.v3）：密钥注入+脱敏（String/GoString/JSON）、base_url 严格校验（url.Parse：userinfo/query/fragment 拒绝、/v1 路径段检查）、YAML 严格解析（KnownFields）、绑定校验（精确域/子域+非知名域宽松告警+本地豁免）接入 Load（Warnings）+ CLI 启动打印；Settings 集中默认值 + ONETOKEN_DB 覆盖；**审查后修复**：%#v 脱敏、BindCheck 接线、环境变量污染测试、/v1 误伤、任务数/语言漂移校验、敏感头拒绝、limits 默认值（22 单测全绿） |
+| **P0.2** 配置骨架 | ① `config/prompts.json`（40 cell 提示词模板，§3.1，与配置分离）；② `config/providers.yaml.example`（§6.1 格式：base_url 不含 `/v1`、`api_key_env` 引用、limits）；③ ~~迁移脚本骨架~~（v0.5 已废弃：JSON 存储无 SQL 迁移，改为 schema_version 兼容校验） | P0.1 | 配置可加载；模板插值校验防注入 | ✅ 2026-08-05：prompts.json 40 cell（10 任务×4 语言）+ providers 模板 + `internal/battery` 加载与防注入校验（5 单测） |
+| **P0.3** 配置加载 | ① YAML + 环境变量（密钥不入文件）；② 所有阈值/规则集中配置（漂移底线 0.140、RPM/RPD、并发、超时；data 目录路径由 `store.DefaultRoot` 管理，默认 `~/.onetoken/data/`，`ONETOKEN_DATA` 覆盖）；③ **采集/审计采样参数默认值**：T=1.0 n=30、T=0 n=3、前沿（≥$5/1M 输入）n=15、审计 k∈{8,16}×n=15、输出上限 16 token（按协议命名映射 §6.2）、`store:false`；④ base_url↔密钥绑定校验骨架 | P0.2 | 单元测试：密钥禁止序列化进日志/报告；绑定校验告警；采样参数默认值断言 | ✅ 2026-08-05：`internal/config` 包（yaml.v3）：密钥注入+脱敏（String/GoString/JSON）、base_url 严格校验（url.Parse：userinfo/query/fragment 拒绝、/v1 路径段检查）、YAML 严格解析（KnownFields）、绑定校验（精确域/子域+非知名域宽松告警+本地豁免）接入 Load（Warnings）+ CLI 启动打印；Settings 集中默认值；**审查后修复**：%#v 脱敏、BindCheck 接线、环境变量污染测试、/v1 误伤、任务数/语言漂移校验、敏感头拒绝、limits 默认值、ONETOKEN_DB 死代码移除（v0.5） |
 
 **P0 完成标准**：`go build` + `go vet` + 基础单测全绿，配置加载与安全基线骨架可用。
 
@@ -42,7 +42,7 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 
 | 任务 | 子步骤 | 依赖 | 验收 | 状态 |
 |---|---|---|---|---|
-| **M1.1** store 层 | ① §4 全部表 + **两条部分唯一索引**（`idx_resp_idem_audit` / `idx_resp_idem_fp`）+ `idx_audits_daily` 独立索引；② 连接约定：`PRAGMA foreign_keys=ON + journal_mode=WAL + busy_timeout=5000`；③ 迁移（`schema_version`）；④ UTC `Z` 后缀时间戳约定 | P0.2 | 外键/唯一约束单测（含 NULL 语义验证）；raw 行只 INSERT 不 UPDATE | ⬜ |
+| **M1.1** 存储层（JSON/JSONL，§4） | ① §4.1 目录布局（models/fingerprints/audits/responses/calibrations/drift）；② 原子写（tmp+rename）+ 目录自动创建；③ 幂等：responses JSONL 追加 + 内存 map 去重（cell+sample_idx）；④ 证据链：raw_sha256 + append-only 约定；⑤ schema_version 校验（不匹配拒绝加载）；⑥ 路径可配置（默认 ~/.onetoken/data/，ONETOKEN_DATA 覆盖） | P0.2 | 单测：原子写（无半文件残留）、JSONL 追加/读回、幂等重跑去重索引、证据链哈希、schema_version 拒绝、导入导出往返 | ✅ 2026-08-05：`internal/store` 包实现：类型定义（Model/Fingerprint/Response/Audit/Calibration/DriftEntry）、原子写（tmp+fsync+rename）、JSONL 追加（O_APPEND）、幂等索引（ResponseKey cell+idx）、sanitize 路径穿越防护、schema_version 泛型校验、导入导出往返（拷贝目录即导出）；13 单测全绿 |
 | **M1.2** preprocess 归一化+分类 | ① §3.2 管线：NFC→标点剥离→大小写折叠→数字映射（阿拉伯-印度/中文）→首 token→颜色词表；② 分类 valid/invalid/refusal/empty（**无静默丢弃**）；③ 黄金样本单测（Zenodo 数据抽取） | P0.2 | 边界测试全绿：阿拉伯-印度数字、中文数字、emoji、全角/半角、多 token 首 token 切分 | ⬜ |
 | **M1.3** fingerprint：分布 + 基 2 JSD | ① 经验分布估计（有效样本）；② JSD：`(KL(p‖m)+KL(q‖m))/(2·ln2)`、KL 自然对数、**0·ln0=0 无平滑**；③ cell 双方 ≥10 有效样本才入平均（论文 Eq.1）；④ T=0 变体 | M1.1、M1.2 | 合成向量单测（对称性、有界 [0,1]、不相交支持）；与 scipy `jensenshannon(p,q,base=2)` **平方后**对拍（注意 sqrt 差异） | ⬜ |
 | **M1.4** calibrate：ROC/AUC/EER/bootstrap | ① 分裂半 genuine / impostor 试验构造（重复奇偶切分）；② ROC/AUC/EER；③ bootstrap CI；④ (k,n,通道) 分档存储（§4 calibrations 表）；⑤ **LOO 1-NN**（自写，仅用于 M1.6 复现家族分类；设计 §2.1 标注 v1.2，此实现为复现所需，投产路径在 v1.2） | M1.1、M1.3 | 构造性单测：perfect 分类器 AUC=1、random AUC=0.5；CI 覆盖正确性抽查；1-NN 最近邻命中单测 | ⬜ |
@@ -90,7 +90,7 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 |---|---|---|---|---|
 | **M4.1** 调度与告警 | ① cron 示例（**UTC 显式**，审计/刷新/校准错峰，§15 模板）；② 告警规则配置化（阈值、漂移、QC flags）；③ 成本护栏联动（超预算告警） | M2.7 | 调度 dry-run 正确；告警触发单测 | ⬜ |
 | **M4.2** 漂移管理 | ① 参考指纹 TTL 30 天自动刷新（`superseded_by` 链）；② 趋势监测：近 5 次均值 > 0.140 且递增 → `stale`；③ `-latest` 别名多版本比对（输出"更像哪个版本"） | M2.7、M4.1 | 漂移判定单测；刷新保留历史版本 | ⬜ |
-| **M4.3** CLI 完整与文档收尾 | ① `calibrate/report/drift` 命令；② README（安装、配置、使用、安全说明）；③ 交叉编译验证 `GOOS=windows|linux|darwin`；④ 启动耗时基准测试（含 DB 打开与迁移，<50ms）；⑤ **备份脚本**（每日备份 db + 校验和，证据链用途，设计 §15.4） | M2.7、M3.3、M4.2 | 三平台二进制可构建；基准数据记录；备份可恢复演练 | ⬜ |
+| **M4.3** CLI 完整与文档收尾 | ① `calibrate/report/drift` 命令；② README（安装、配置、使用、安全说明）；③ 交叉编译验证 `GOOS=windows|linux|darwin`；④ 启动耗时基准测试（含 data 目录初始化，<50ms）；⑤ **备份脚本**（每日打包 `data/` 目录 + 校验和，证据链用途，设计 §15.4） | M2.7、M3.3、M4.2 | 三平台二进制可构建；基准数据记录；备份可恢复演练 | ⬜ |
 | **M4.4** M4 长期验收 | ① 10 端点 × 每日 × 14 天 ≈ 140 次审计，误报数 ∈ τ_fpr1 对应二项 CI（≈0–4 次）；② 人为注入替换**全部捕获**（注入协议先行定义：注入什么、多频繁、谁判定捕获）；③ 每 7 天更新一次本计划文档的验收进度 | M4.1–M4.3 | 14 天区间验收记录；注入捕获率 100% | ⬜ |
 
 **M4 完成标准**：设计文档 §14 M4 行验收项达成，交付 MVP。
@@ -127,6 +127,7 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 | 2026-08-05 | 计划 v1.0 | 建立本实施计划（P0+M1–M4 任务拆分）与 AGENTS.md 工作协议 | 用户要求 |
 | 2026-08-05 | 计划 v1.1 | 并入五轮审查：探测器 flag 补齐（5 类对齐设计 §5）、LOO 1-NN 归属 M1.4、采样参数/db 路径入 P0.3、M2 依赖补 M1.1、备份入 M4.3、T2 改写标注 v1.1、风险来源说明；同步修正设计文档脚注（v0.4/四轮） | 审查结论 |
 | 2026-08-05 | P0 完成 | **P0.1–P0.3 全部完成**（见任务表）；Go 1.26.5 安装于 `~/.local/go`（go.dev 大文件被网络干扰，改用阿里云镜像），模块代理 goproxy.cn；首次提交 475460a | 用户批准启动 |
+| 2026-08-05 | 设计 v0.5：**存储改为分目录 JSON/JSONL**（用户评审决议，替代 SQLite）——按语义分片（响应按 audit 为 JSONL 追加）、原子写、幂等内存去重、证据链 append-only+sha256、schema_version 校验、导入导出天然；设计文档 §4/§2/§10/§15 与 AGENTS.md §4 同步 | 用户评审意见（远程仓库 + 存储讨论） |
 
 ---
 
@@ -138,6 +139,9 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 | 2026-08-05 | 计划 v1.1：并入五轮审查（探测器 flag 补齐、1-NN 归属、采样参数、依赖、备份、风险来源、AGENTS.md 措辞统一） | 助手 |
 | 2026-08-05 | **P0 阶段完成**：P0.1 仓库/Go 模块、P0.2 配置骨架（40-cell 提示词+battery 校验）、P0.3 config 包（密钥/阈值/绑定校验）；11 单测全绿；首次提交 475460a | 助手 |
 | 2026-08-05 | **P0 六轮审查修复**：%#v 密钥脱敏（GoString）、BindCheck 接入 Load（Warnings）+ CLI 启动告警、YAML 严格解析、url.Parse 严格校验（userinfo//v1 误伤）、任务数/语言漂移校验、占位符检测扩展（裸 $/%/system_prompt）、敏感头拒绝、limits 默认值；22 单测全绿 | 助手 |
+| 2026-08-05 | **设计 v0.5 + 计划 v1.2**：存储改分目录 JSON/JSONL（用户决议）；M1.1 改为 JSON 存储层；远程仓库 origin 已配置（https://github.com/Acidmoon/OneToken.git，推送待认证） | 用户评审意见 |
+| 2026-08-05 | **M1.1 完成**：JSON/JSONL 存储层实现（原子写/幂等/证据链/schema_version/sanitize），13 单测；累计 35 单测全绿 | 助手 |
+| 2026-08-05 | **M1.1 七轮审查修复**：sanitize Windows 保留名/非法字符/NUL、原子写统一 0644+目录 fsync、Save 复制入参、JSONL 行号错误、往返测试改 DeepEqual、schema 拒绝参数化、导入导出增强、并发追加测试；config 移除 ONETOKEN_DB 死代码；设计 §4.2 JSONL 版本豁免；文档 v0.4 残留清理（实施计划头部/P0.2/P0.3/M4.3、AGENTS.md）——36 单测全绿（含 -race） | 助手 |
 
 ---
 

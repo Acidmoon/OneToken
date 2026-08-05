@@ -8,7 +8,7 @@
 **OneToken** 是一个 Go 实现的 CLI 工具：基于论文《One Token Is Enough》（arXiv:2607.10252）的单 token 行为指纹方法，对"某提供商的某模型端点"做**黑盒真伪检测**（模型替换 / 量化顶替 / 版本回退 / 跨 provider 漂移）。
 
 - **实现语言**：Go（用户拍板；IO 密集场景，启动毫秒级、单二进制、goroutine 并发）
-- **当前状态**：设计阶段，尚未开始实现代码
+- **当前状态**：P0 与 M1.1（存储层）已完成；下一任务 M1.2（preprocess 归一化）
 - **环境**：WSL2 (Ubuntu 22.04)，项目位于 `/home/acidmoon/projects/OneToken`；在 Windows VSCode 中需用 WSL Remote 打开（`\\wsl$\Ubuntu\home\acidmoon\projects\OneToken`）
 
 ## 2. 文档地图（必读与维护）
@@ -17,7 +17,7 @@
 |---|---|---|
 | `docs/OneToken-Is-Enough-LLM-Fingerprinting-2607.10252.pdf` | 论文原件 | 只读，不修改 |
 | `docs/OneToken-Is-Enough-论文总结.md` | 论文要点与方法论（设计的事实依据） | 论文相关核对有出入时修正 |
-| `docs/OneToken-工程设计方案.md` | **工程设计与验收标准**（当前 v0.4；所有验收以它为准） | 设计决策变更时必须更新，并 bump 版本号 + 在 §7 决策日志留痕 |
+| `docs/OneToken-工程设计方案.md` | **工程设计与验收标准**（当前 v0.5；所有验收以它为准） | 设计决策变更时必须更新，并 bump 版本号 + 在 §7 决策日志留痕 |
 | `docs/OneToken-实施计划.md` | **项目进度唯一真相**：P0+M1–M4 任务拆分、状态、风险、决策日志 | **每次完成任何实质性工作后必须更新**（勾选状态/日期/备注/追加日志） |
 | `AGENTS.md` | 本工作协议 | 工作流约定变更时 |
 
@@ -56,8 +56,8 @@
 - **三协议**：Responses（`reasoning:{effort:"minimal"}`，o 系拒绝时降级 low 或按 §1.2 排除、`reasoning_tokens`）/ chat（顶层 `reasoning_effort`、`completion_tokens_details`）/ Anthropic（`thinking:{type:"disabled"}`，无需 beta 头）。
 - **JSD 基 2 自写**：`(KL(p‖m)+KL(q‖m))/(2·ln2)`，KL 自然对数，**0·ln0=0 无平滑**；常数标度以 M1 前置门（Zenodo 软件归档）pin 为准。
 - **密钥**：只走环境变量（`api_key_env`），永不落盘/落日志/落报告。
-- **SQLite**：modernc 纯 Go、`PRAGMA foreign_keys=ON + WAL + busy_timeout`、幂等用部分唯一索引（`idx_resp_idem_audit`/`idx_resp_idem_fp`）。
-- **性能**：启动 <50ms（含 DB 打开与迁移）；120 查询审计典型 3–20s（网络主导），不承诺 <2s。
+- **存储**：分目录 JSON/JSONL（用户评审决议 v0.5，替代 SQLite）：`models.json` / `calibrations.json` / `drift.json` / `fingerprints/<id>.json` / `audits/<id>.json` / `responses/<id>.jsonl`；原子写 tmp+rename；幂等用内存 map 去重（cell+sample_idx）；证据链 append-only + raw_sha256；schema_version 校验；目录可配（ONETOKEN_DATA）。
+- **性能**：启动 <50ms（含 data 目录初始化）；120 查询审计典型 3–20s（网络主导），不承诺 <2s。
 - **安全**：禁用重定向（`CheckRedirect → ErrUseLastResponse`）、scheme 校验（https，localhost 例外）、SSRF 拦截（RFC1918/环回/链路本地/CGNAT/IPv6 私有段 + DNS rebinding 解析→校验→拨号）、base_url↔密钥绑定校验、报告 HTML 默认转义。
 
 ## 5. 完成度检查清单（交付前过一遍）
