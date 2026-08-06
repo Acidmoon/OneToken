@@ -77,22 +77,23 @@ type Fingerprint struct {
 
 // Response 是单次采样响应（responses/<audit_id>.jsonl 的一行）。
 type Response struct {
-	Cell            string          `json:"cell"` // "task:lang"
-	SampleIdx       int             `json:"sample_idx"`
-	Temperature     float64         `json:"temperature"`
-	PromptHash      string          `json:"prompt_hash,omitempty"`
-	RawCompletion   string          `json:"raw_completion"`
-	RawSHA256       string          `json:"raw_sha256"`
-	Normalized      string          `json:"normalized,omitempty"`
-	Classification  string          `json:"classification"` // valid|invalid|refusal|empty
-	ReasoningTokens int             `json:"reasoning_tokens,omitempty"`
-	FinishReason    string          `json:"finish_reason,omitempty"`
-	LatencyMS       int64           `json:"latency_ms,omitempty"`
-	Provider        string          `json:"provider,omitempty"`
-	ReportedModel   string          `json:"reported_model,omitempty"`
-	Usage           json.RawMessage `json:"usage,omitempty"` // 协议原始 usage（差异已由 provider 层归一）
-	CostUSD         float64         `json:"cost_usd,omitempty"`
-	TS              string          `json:"ts"` // UTC Z
+	Cell             string          `json:"cell"` // "task:lang"
+	SampleIdx        int             `json:"sample_idx"`
+	Temperature      float64         `json:"temperature"`
+	PromptHash       string          `json:"prompt_hash,omitempty"`
+	RawCompletion    string          `json:"raw_completion"`
+	RawSHA256        string          `json:"raw_sha256"`
+	Normalized       string          `json:"normalized,omitempty"`
+	Classification   string          `json:"classification"` // valid|invalid|refusal|empty
+	ReasoningTokens  int             `json:"reasoning_tokens,omitempty"`
+	CompletionTokens int             `json:"completion_tokens,omitempty"`
+	FinishReason     string          `json:"finish_reason,omitempty"`
+	LatencyMS        int64           `json:"latency_ms,omitempty"`
+	Provider         string          `json:"provider,omitempty"`
+	ReportedModel    string          `json:"reported_model,omitempty"`
+	Usage            json.RawMessage `json:"usage,omitempty"` // 协议原始 usage（差异已由 provider 层归一）
+	CostUSD          float64         `json:"cost_usd,omitempty"`
+	TS               string          `json:"ts"` // UTC Z
 }
 
 // Audit 是单次审计结果（audits/<audit_id>.json）。

@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -533,5 +534,33 @@ func TestRunBatteryAllDone(t *testing.T) {
 	}
 	if len(mp.callsSnapshot()) != 0 {
 		t.Fatal("全部完成后不应再发请求")
+	}
+}
+
+// ---- 审查回归：CountTaskFailures（unreachable 判定生产者） ----
+
+func TestCountTaskFailures(t *testing.T) {
+	e1 := &TaskError{Cell: "a", SampleIdx: 0, Err: errors.New("x")}
+	e2 := &TaskError{Cell: "b", SampleIdx: 1, Err: errors.New("y")}
+	plain := errors.New("plain")
+
+	if n := CountTaskFailures(nil); n != 0 {
+		t.Fatalf("nil 应为 0，实际 %d", n)
+	}
+	if n := CountTaskFailures(plain); n != 0 {
+		t.Fatalf("普通错误应为 0，实际 %d", n)
+	}
+	if n := CountTaskFailures(e1); n != 1 {
+		t.Fatalf("单 TaskError 应为 1，实际 %d", n)
+	}
+	// errors.Join 展平计数（含嵌套与普通错误混入；e1 两次出现去重）
+	joined := errors.Join(e1, e2, plain, errors.Join(e1, errors.New("nested")))
+	if n := CountTaskFailures(joined); n != 2 {
+		t.Fatalf("Join 聚合应计 2 个唯一 TaskError（e1 去重），实际 %d", n)
+	}
+	// fmt.Errorf 包装的 TaskError 也应识别
+	wrapped := fmt.Errorf("outer: %w", e1)
+	if n := CountTaskFailures(wrapped); n != 1 {
+		t.Fatalf("包装 TaskError 应计 1，实际 %d", n)
 	}
 }

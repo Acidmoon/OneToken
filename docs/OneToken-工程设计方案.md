@@ -2,7 +2,7 @@
 
 > **依据论文**：《One Token Is Enough: Fingerprinting and Verifying Large Language Models from Single-Token Output Distributions》（arXiv:2607.10252，Tomáš Bruckner）
 >
-> **文档状态**：v0.12（并入 M2.3 collector 实现：RunBattery 签名具化、密钥回显拒收）
+> **文档状态**：v0.13（并入 M2.4 detector 实现：Screen 签名具化、测量口径留痕——T0 参考比对取舍/偏好任务豁免/护栏归因/o 系 gate 归属）
 > **决策记录**：
 > - 实现语言：**Go**（IO 密集场景，启动毫秒级、单二进制、goroutine 并发天然适配批量采集；开发/迭代快）——用户拍板。
 > - **统一提供商调用层为系统核心**：任意 BaseURL + API Key 即可请求，三种协议适配（OpenAI Responses / OpenAI chat completions 兼容 / Anthropic messages），参考注册（enroll）与待审核模型（audit）共用此层——用户评审意见 1。
@@ -94,7 +94,7 @@
 | `internal/battery` | 40-cell 探针电池定义与提示词加载（与配置分离） | `Battery`（10 任务 × 4 语言，cell 清单） |
 | `internal/collector` | 并发采集：worker pool（per-provider 并发上限 4–8，硬上限 256）、幂等键、可恢复续采、种子打乱、限流预算、失败重试与总 deadline | `RunBattery(ctx, provider.Provider, *store.Store, *battery.Battery, cells []string, n int, T float64, Options) ([]*store.Response, error)`（M2.3 具化：幂等续采需 store 索引、提示词组装需 battery、并发/预算/进度经 Options；`[]Raw` 具化为 `[]*store.Response` 含证据链哈希与元数据） |
 | `internal/preprocess` | **归一化 + 分类**（valid/invalid/refusal/empty），在采样与探测之前运行 | `NormalizeClassify(raw) → Processed` |
-| `internal/detector` | 测量有效性探测与清洗（依赖 preprocess 分类结果），与 verify 解耦 | `Screen(processed) → {ok, flags, cleaned}` |
+| `internal/detector` | 测量有效性探测与清洗（依赖 preprocess 分类结果），与 verify 解耦 | `Screen(responses []*store.Response, ScreenOptions) *Result`（M2.4 具化：设计 `Screen(processed)→{ok,flags,cleaned}` 的入参为原始响应（分类可预填或经 TaskForCell 现算），出参 Result 含 5 类 Flags + per-cell 统计 + ValidCells/KMinCells（inconclusive 信号）；cleaned 语义由调用方据 Flags 过滤实现；ScreenOptions：Settings/T0Responses/RefusalBaseline(nil=无)/FailedTasks/TotalTasks/TaskForCell） |
 | `internal/fingerprint` | 分布估计、**基 2 JSD（自写，直接按论文 Eq.1）**、指纹对象（构建自 `store.Fingerprint`） | `Distance(a, b *Fingerprint) (float64, int)`——返回 (距离, 参与 cell 数)，参与数供上层按有效 cell < k_min 判 inconclusive；`Build(responses) (*Fingerprint, error)` |
 | `internal/verify` | 判定：JSD vs τ（按 (k,n,通道) 匹配校准库），含 inconclusive 缓冲 | `Verify(ctx, target Provider, claimed Fingerprint, k, n) → Verdict` |
 | `internal/calibrate` | genuine/impostor 试验（分裂半奇偶切分原语）、ROC/AUC/EER、bootstrap CI、(k,n,通道) 分档（M1 范围）；LOO 1-NN 已实现（复现用途，投产路径 v1.2）；UPGMA/ARI（报告，v1.1）为后续里程碑 | `Calibrate(genuine, impostor []float64, opts) → *store.Calibration`（分档键 Scope/K/NPerCell/通道 与 CalibratedAt 由调用方填充；空输入或非有限阈值返回 nil 无效校准）；`SplitHalves` / `LOO1NN` |
@@ -294,6 +294,15 @@ data/                              # 根目录可配置（默认 ~/.onetoken/dat
 | **端点可达性** | 重试统计 | 持续失败 → `unreachable`（论文：5+1 个端点损耗先例）；审计侧有效 cell 数 < k_min 时判 **inconclusive** |
 
 被标记 `hidden-reasoning` / `response-caching` / `temperature-not-honored` 的测量**不进入指纹与判定**，且自身即告警项。
+
+**M2.4 实现口径（v0.13 留痕）**：
+- **截断信号跨协议**：OpenAI `finish_reason=="length"` 与 Anthropic `stop_reason=="max_tokens"`、Responses 新版 `max_output_tokens` 均计截断（hidden-reasoning 确定性证据）；
+- **退化启发式可达性**：completion ≥40 阈值受 M2.2 护栏（16+16=32）约束，标准采集路径下不可达——该启发式是「协议层无法提供字段时」的降级路径；护栏拒收（`ErrCompletionTooLong`）的归因（→ hidden-reasoning）由 M2.5 verify 据 `TaskError.Err` 分类接线；token 数中间带 7–39 不触发（灰区，观测口径）；
+- **T=0 一致性实现为自洽性**（同 cell 探针彼此一致，归一化后比较容格式变体），非与参考 T=0 分布逐答案比对（参考侧仅 3 样本、口径为「确定性 cell 占比」）；判定门槛 judged cell ≥ T0MinJudgedCells(3)、每 cell ≥ T0ProbeN(5)；与参考 T0 分布的比对降级，由 M2.5 主距离兜底；
+- **response-caching 豁免**：closed 空间唯一数达空间规模（抛硬币 unique=2 正常）、偏好类任务（ID 前缀 favorite，固有稳定偏好）不判；open 非偏好任务判；延迟联合条件默认禁用（延迟受端点控制，启用即被欺骗）；命中=嫌疑需本地校准（论文 14/2040 均良性）；
+- **unreachable 生产者**：失败计数经 `collector.CountTaskFailures` 从 RunBattery 聚合错误统计；
+- **safety-layer-change** 基线为指针（nil=无基线，显式传入才启用）；有效/refusal 率分母=已分类响应（Unknown 不计入，计数可观测）；valid<80% 仅模型级 QC（Result.ValidRateLow）；
+- **o 系 gate 归属**：「实测接受 effort 最低档」的接受度探测归 M2.7 能力探测，本层只做 reasoning_tokens>0 标记。
 
 ---
 

@@ -20,6 +20,13 @@ type Settings struct {
 	CompletionTokenNormalMax  int     // 正常一词答案 token 数上限（1–6）
 	CompletionTokenAnomalyMin int     // 异常端点阈值（40–60）
 	KMinCells                 int     // 有效 cell < k_min → inconclusive（占位值 3；设计文档无既定取值，M1 校准后确认）
+	T0DeterministicRatio      float64 // T=0 确定性 cell 占比 < 此值 → temperature-not-honored（论文 90.4%/84.5%，保守 0.80，需本地校准）
+	T0MinJudgedCells          int     // T=0 判定所需最少 judged cell 数（< 此值不判定并置 T0NotJudged；默认 3，设计探针 3~5 cell）
+	CacheUniqueMax            int     // 缓存签名：cell 内唯一答案数 ≤ 此值且 n≥CacheMinN → 方差崩溃嫌疑（默认 2）
+	CacheMinN                 int     // 缓存签名：cell 有效样本下限（默认 10）
+	CacheLatencyMaxMS         int64   // 缓存签名联合低延迟条件（默认 0=禁用延迟条件，仅方差信号）
+	RefusalDriftThreshold     float64 // refusal 率 |审计−基线| 突变阈值 → safety-layer-change（默认 0.15）
+	UnreachableFailRatio      float64 // 失败任务占比 ≥ 此值 → unreachable（默认 0.8）
 
 	// 漂移（设计 §12）
 	DriftBaseline float64 // 参考噪声底线（论文：0.140）
@@ -55,6 +62,14 @@ func DefaultSettings() Settings {
 		CompletionTokenNormalMax:  6,
 		CompletionTokenAnomalyMin: 40,
 		KMinCells:                 3,
+
+		T0DeterministicRatio:  0.80,
+		T0MinJudgedCells:      3,
+		CacheUniqueMax:        2,
+		CacheMinN:             10,
+		CacheLatencyMaxMS:     0,
+		RefusalDriftThreshold: 0.15,
+		UnreachableFailRatio:  0.8,
 
 		DriftBaseline: 0.140,
 		DriftWindow:   5,

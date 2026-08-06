@@ -80,6 +80,41 @@ func (e *TaskError) Error() string {
 
 func (e *TaskError) Unwrap() error { return e.Err }
 
+// CountTaskFailures 统计聚合错误中的 TaskError 数量（detector unreachable
+// 判定的 FailedTasks 生产者；errors.Join 的嵌套链遍历计数）。
+func CountTaskFailures(err error) int {
+	if err == nil {
+		return 0
+	}
+	seen := make(map[error]bool)
+	queue := []error{err}
+	n := 0
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if cur == nil || seen[cur] {
+			continue
+		}
+		seen[cur] = true
+		// 多错误容器（errors.Join）先展平：errors.As 对 joinError 会递归
+		// 命中第一个 TaskError 并吞掉兄弟错误，必须先展开再逐个处理。
+		if u, ok := cur.(interface{ Unwrap() []error }); ok {
+			queue = append(queue, u.Unwrap()...)
+			continue
+		}
+		var te *TaskError
+		if errors.As(cur, &te) {
+			n++
+			continue
+		}
+		// 单错误链继续
+		if u, ok := cur.(interface{ Unwrap() error }); ok {
+			queue = append(queue, u.Unwrap())
+		}
+	}
+	return n
+}
+
 // job 是一个采样任务（cell × sample_idx）。
 type job struct {
 	cell      string
@@ -333,18 +368,19 @@ func paramsFor(b *battery.Battery, cell, model string, T float64, maxTokens int,
 // toResponse 将协议统一响应收敛为 store.Response（证据链：raw_sha256 必填）。
 func toResponse(j job, T float64, r *provider.ResponseRecord) *store.Response {
 	return &store.Response{
-		Cell:            j.cell,
-		SampleIdx:       j.sampleIdx,
-		Temperature:     T,
-		RawCompletion:   r.RawCompletion,
-		RawSHA256:       sha256Hex(r.RawCompletion),
-		ReasoningTokens: r.ReasoningTokens,
-		FinishReason:    r.FinishReason,
-		LatencyMS:       r.LatencyMS,
-		Provider:        r.Provider,
-		ReportedModel:   r.ReportedModel,
-		CostUSD:         r.CostUSD,
-		TS:              r.TS.UTC().Format(time.RFC3339),
+		Cell:             j.cell,
+		SampleIdx:        j.sampleIdx,
+		Temperature:      T,
+		RawCompletion:    r.RawCompletion,
+		RawSHA256:        sha256Hex(r.RawCompletion),
+		ReasoningTokens:  r.ReasoningTokens,
+		CompletionTokens: r.CompletionTokens,
+		FinishReason:     r.FinishReason,
+		LatencyMS:        r.LatencyMS,
+		Provider:         r.Provider,
+		ReportedModel:    r.ReportedModel,
+		CostUSD:          r.CostUSD,
+		TS:               r.TS.UTC().Format(time.RFC3339),
 	}
 }
 
