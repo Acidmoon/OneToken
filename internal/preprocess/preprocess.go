@@ -276,7 +276,7 @@ func inClosedSpace(s string, task Task) bool {
 		r, _ := utf8.DecodeRuneInString(s)
 		return unicode.IsLetter(r)
 	case task.ID == "coin_flip":
-		return s == "heads" || s == "tails"
+		return s == "h" || s == "t" // 论文 canonical 码（M1.5 pin）
 	}
 	return false
 }
@@ -288,50 +288,152 @@ func isColorTask(id string) bool {
 
 // colorLexicon 是跨语言颜色词表：各语言颜色词 → 规范码（英文小写）。
 // 用于将四种语言的同一颜色映射到同一规范码，使跨语言分布可比（论文 §IV-B）。
-// 高频色（violet/magenta 等）按色系归入基础规范码；词表外的颜色保留原 token
-// （既定行为，M1.6 重放时可按真实分布补充）。
+// 高频色（violet/magenta 等）在论文 canonical 中为独立码（M1.5 pin 后不再归并基础色）；
+// 词表外颜色保留原 token（既定行为，M1.6 重放时可按真实分布补充）。
+// colorLexicon 是跨语言颜色词表：各语言颜色词 → 论文 canonical 码（22 码：red/blue/green/yellow/
+// orange/purple/violet/pink/black/white/gray/brown/cyan/turquoise/magenta/indigo/teal/gold/silver/
+// azure/crimson/emerald）。来源：论文软件归档 stats/color-lexicon.json（M1.5 pin，4 语言合并），
+// 另保留本项目扩展键（超集）。词表外的颜色保留原 token（既定行为）。
+// 注意：canonical 码集为论文定义，本项目扩展键（beige/navy 等）非论文 canonical，
+// 跨语言可比性以论文 22 码为准。
 var colorLexicon = map[string]string{
-	// 红
-	"red": "red", "红色": "red", "红": "red", "красный": "red", "أحمر": "red", "бордовый": "brown",
-	// 绿
-	"green": "green", "绿色": "green", "绿": "green", "зелёный": "green", "أخضر": "green",
-	"emerald": "green", "olive": "green", "lime": "green", "祖母绿": "green", "橄榄绿": "green", "青柠": "green",
-	"салатовый": "green",
-	// 蓝
-	"blue": "blue", "蓝色": "blue", "蓝": "blue", "синий": "blue", "أزرق": "blue",
-	// 黄
-	"yellow": "yellow", "黄色": "yellow", "黄": "yellow", "жёлтый": "yellow", "أصفر": "yellow",
-	"amber": "orange", "琥珀": "orange", "янтарный": "orange",
-	// 黑
-	"black": "black", "黑色": "black", "黑": "black", "чёрный": "black", "أسود": "black",
-	// 白
-	"white": "white", "白色": "white", "白": "white", "белый": "white", "أبيض": "white",
-	// 橙
-	"orange": "orange", "橙色": "orange", "橙": "orange", "оранжевый": "orange", "برتقالي": "orange",
-	"coral": "orange",
-	// 紫
-	"purple": "purple", "紫色": "purple", "紫": "purple", "фиолетовый": "purple", "بنفسجي": "purple",
-	"violet": "purple", "magenta": "purple", "lavender": "purple", "紫罗兰": "purple", "品红": "purple",
-	"лиловый": "purple", "زهري": "pink",
-	// 粉
-	"pink": "pink", "粉色": "pink", "粉": "pink", "розовый": "pink", "وردي": "pink",
-	// 棕
-	"brown": "brown", "棕色": "brown", "棕": "brown", "коричневый": "brown", "بني": "brown",
-	"maroon": "brown", "栗色": "brown", "عنابي": "brown",
-	// 灰
-	"gray": "gray", "grey": "gray", "灰色": "gray", "灰": "gray", "серый": "gray", "رمادي": "gray",
-	// 青
-	"cyan": "cyan", "青色": "cyan", "青": "cyan", "голубой": "cyan", "سماوي": "cyan",
-	"teal": "cyan", "turquoise": "cyan", "绿松石": "cyan", "бирюзовый": "cyan", "تركوازي": "cyan",
-	// 金
-	"gold": "gold", "金色": "gold", "金": "gold", "золотой": "gold", "ذهبي": "gold",
-	// 银
-	"silver": "silver", "银色": "silver", "银": "silver", "серебряный": "silver", "فضي": "silver",
-	// 米
-	"beige": "beige", "米色": "beige", "бежевый": "beige", "بيج": "beige",
-	// 藏青
-	"navy": "navy", "藏青": "navy", "тёмно-синий": "navy", "тёмносиний": "navy", "كحلي": "navy",
-	"indigo": "navy", "靛蓝": "navy",
+	"azure":       "azure",     // azure
+	"голубой":     "azure",     // azure
+	"سماوي":       "azure",     // azure
+	"天蓝色":         "azure",     // azure
+	"beige":       "beige",     // beige
+	"бежевый":     "beige",     // beige
+	"بيج":         "beige",     // beige
+	"米色":          "beige",     // beige
+	"black":       "black",     // black
+	"черный":      "black",     // black
+	"чёрный":      "black",     // black
+	"أسود":        "black",     // black
+	"اسود":        "black",     // black
+	"黑":           "black",     // black
+	"黑色":          "black",     // black
+	"blue":        "blue",      // blue
+	"navy":        "blue",      // blue
+	"синий":       "blue",      // blue
+	"أزرق":        "blue",      // blue
+	"ازرق":        "blue",      // blue
+	"蓝":           "blue",      // blue
+	"蓝色":          "blue",      // blue
+	"brown":       "brown",     // brown
+	"maroon":      "brown",     // brown
+	"бордовый":    "brown",     // brown
+	"коричневый":  "brown",     // brown
+	"بني":         "brown",     // brown
+	"عنابي":       "brown",     // brown
+	"栗色":          "brown",     // brown
+	"棕":           "brown",     // brown
+	"棕色":          "brown",     // brown
+	"褐色":          "brown",     // brown
+	"crimson":     "crimson",   // crimson
+	"багровый":    "crimson",   // crimson
+	"قرمزي":       "crimson",   // crimson
+	"深红":          "crimson",   // crimson
+	"cyan":        "cyan",      // cyan
+	"تركوازي":     "cyan",      // cyan
+	"绿松石":         "cyan",      // cyan
+	"青":           "cyan",      // cyan
+	"青色":          "cyan",      // cyan
+	"emerald":     "emerald",   // emerald
+	"изумрудный":  "emerald",   // emerald
+	"زمردي":       "emerald",   // emerald
+	"翡翠绿":         "emerald",   // emerald
+	"gold":        "gold",      // gold
+	"золотой":     "gold",      // gold
+	"ذهبي":        "gold",      // gold
+	"金":           "gold",      // gold
+	"金色":          "gold",      // gold
+	"gray":        "gray",      // gray
+	"grey":        "gray",      // gray
+	"серый":       "gray",      // gray
+	"رمادي":       "gray",      // gray
+	"灰":           "gray",      // gray
+	"灰色":          "gray",      // gray
+	"green":       "green",     // green
+	"lime":        "green",     // green
+	"olive":       "green",     // green
+	"зеленый":     "green",     // green
+	"зелёный":     "green",     // green
+	"салатовый":   "green",     // green
+	"أخضر":        "green",     // green
+	"اخضر":        "green",     // green
+	"橄榄绿":         "green",     // green
+	"祖母绿":         "green",     // green
+	"绿":           "green",     // green
+	"绿色":          "green",     // green
+	"青柠":          "green",     // green
+	"indigo":      "indigo",    // indigo
+	"индиго":      "indigo",    // indigo
+	"نيلي":        "indigo",    // indigo
+	"靛蓝":          "indigo",    // indigo
+	"magenta":     "magenta",   // magenta
+	"пурпурный":   "magenta",   // magenta
+	"品红":          "magenta",   // magenta
+	"тёмно-синий": "navy",      // navy
+	"тёмносиний":  "navy",      // navy
+	"كحلي":        "navy",      // navy
+	"藏青":          "navy",      // navy
+	"amber":       "orange",    // orange
+	"coral":       "orange",    // orange
+	"orange":      "orange",    // orange
+	"оранжевый":   "orange",    // orange
+	"янтарный":    "orange",    // orange
+	"برتقالي":     "orange",    // orange
+	"橘色":          "orange",    // orange
+	"橙":           "orange",    // orange
+	"橙色":          "orange",    // orange
+	"琥珀":          "orange",    // orange
+	"pink":        "pink",      // pink
+	"розовый":     "pink",      // pink
+	"زهري":        "pink",      // pink
+	"وردي":        "pink",      // pink
+	"粉":           "pink",      // pink
+	"粉红色":         "pink",      // pink
+	"粉色":          "pink",      // pink
+	"lavender":    "purple",    // purple
+	"purple":      "purple",    // purple
+	"фиолетовый":  "purple",    // purple
+	"بنفسجي":      "purple",    // purple
+	"紫":           "purple",    // purple
+	"紫罗兰":         "purple",    // purple
+	"紫色":          "purple",    // purple
+	"red":         "red",       // red
+	"scarlet":     "red",       // red
+	"красный":     "red",       // red
+	"أحمر":        "red",       // red
+	"احمر":        "red",       // red
+	"红":           "red",       // red
+	"红色":          "red",       // red
+	"silver":      "silver",    // silver
+	"серебряный":  "silver",    // silver
+	"فضي":         "silver",    // silver
+	"银":           "silver",    // silver
+	"银色":          "silver",    // silver
+	"teal":        "teal",      // teal
+	"turquoise":   "turquoise", // turquoise
+	"бирюзовый":   "turquoise", // turquoise
+	"فيروزي":      "turquoise", // turquoise
+	"绿松石色":        "turquoise", // turquoise
+	"violet":      "violet",    // violet
+	"лиловый":     "violet",    // violet
+	"أرجواني":     "violet",    // violet
+	"white":       "white",     // white
+	"белый":       "white",     // white
+	"أبيض":        "white",     // white
+	"ابيض":        "white",     // white
+	"白":           "white",     // white
+	"白色":          "white",     // white
+	"yellow":      "yellow",    // yellow
+	"желтый":      "yellow",    // yellow
+	"жёлтый":      "yellow",    // yellow
+	"أصفر":        "yellow",    // yellow
+	"اصفر":        "yellow",    // yellow
+	"黄":           "yellow",    // yellow
+	"黄色":          "yellow",    // yellow
 }
 
 // colorCanonical 将颜色回答映射为规范码（整串优先，再试首 token）。
@@ -348,14 +450,16 @@ func colorCanonical(s string) string {
 }
 
 // coinLexicon 是硬币结果跨语言词表 → 规范码。
+// coinLexicon 是硬币结果跨语言词表 → 论文 canonical 码 h/t（论文 01-normalize.js COIN 表：
+// en heads/tails→h/t、ru орёл/орел/решка、zh 正面/正/反面/反、ar صورة/كتابة；M1.5 pin）。
 var coinLexicon = map[string]string{
-	"head": "heads", "heads": "heads", "tail": "tails", "tails": "tails",
-	"正面": "heads", "正": "heads", "反面": "tails", "反": "tails",
-	"орел": "heads", "орёл": "heads", "решка": "tails",
-	"صورة": "heads", "كتابة": "tails",
+	"head": "h", "heads": "h", "tail": "t", "tails": "t",
+	"正面": "h", "正": "h", "反面": "t", "反": "t",
+	"орел": "h", "орёл": "h", "решка": "t",
+	"صورة": "h", "كتابة": "t",
 }
 
-// coinCanonical 将硬币回答映射为 heads/tails 规范码。
+// coinCanonical 将硬币回答映射为论文 canonical 码 h/t（M1.5 pin：论文 01-normalize.js COIN 表）。
 func coinCanonical(s string) string {
 	if c, ok := coinLexicon[s]; ok {
 		return c

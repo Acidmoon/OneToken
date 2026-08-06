@@ -40,3 +40,6 @@ coverage.*
 
 # 本地审查产物
 .pi-subagents/
+data/zenodo/
+/replay
+.review_tmp/

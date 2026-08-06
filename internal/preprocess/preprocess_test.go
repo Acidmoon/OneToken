@@ -186,10 +186,10 @@ func TestClassifyClosedLetter(t *testing.T) {
 
 func TestClassifyCoinFlip(t *testing.T) {
 	for raw, want := range map[string]string{
-		"heads": "heads", "tails": "tails",
-		"正面": "heads", "反面": "tails",
-		"орёл": "heads", "решка": "tails",
-		"صورة": "heads", "كتابة": "tails",
+		"heads": "h", "tails": "t",
+		"正面": "h", "反面": "t",
+		"орёл": "h", "решка": "t",
+		"صورة": "h", "كتابة": "t",
 	} {
 		r := NormalizeClassify(raw, taskCoin)
 		if r.Classification != ClassValid || r.Normalized != want {
@@ -256,7 +256,7 @@ func TestGoldenSamples(t *testing.T) {
 		{"英文数字带标点", "\"42\".", taskNum100, ClassValid, "42"},
 		{"中文颜色", "红色", taskColor, ClassValid, "red"},
 		{"俄文颜色大写", "КРАСНЫЙ", taskColor, ClassValid, "red"},
-		{"硬币中文", "正面", taskCoin, ClassValid, "heads"},
+		{"硬币中文", "正面", taskCoin, ClassValid, "h"},
 		{"超出空间", "101", taskNum100, ClassInvalid, "101"},
 		{"非数字", "apple", taskNum100, ClassInvalid, "apple"},
 		{"明确拒绝英文", "Sorry, I cannot help.", taskNum100, ClassRefusal, "sorry, i cannot help."},
@@ -348,11 +348,11 @@ func TestColorNavyRussian(t *testing.T) {
 	}
 }
 
-// 中文单字色与高频色系归并
+// 中文单字色与扩展色系（canonical 码以论文 22 码为准，M1.5 pin）
 func TestColorExtendedLexicon(t *testing.T) {
 	for raw, want := range map[string]string{
 		"红": "red", "蓝": "blue", "绿": "green",
-		"violet": "purple", "teal": "cyan", "maroon": "brown",
+		"violet": "violet", "teal": "teal", "maroon": "brown",
 		"тёмносиний": "navy", "фиолетовый": "purple",
 	} {
 		r := NormalizeClassify(raw, taskColor)
@@ -365,8 +365,8 @@ func TestColorExtendedLexicon(t *testing.T) {
 // coin 单数 head（审查 M6）
 func TestClassifyCoinHead(t *testing.T) {
 	r := NormalizeClassify("head", taskCoin)
-	if r.Classification != ClassValid || r.Normalized != "heads" {
-		t.Fatalf("head 应映射 heads valid，实际 %s (%q)", r.Classification, r.Normalized)
+	if r.Classification != ClassValid || r.Normalized != "h" {
+		t.Fatalf("head 应映射 h valid，实际 %s (%q)", r.Classification, r.Normalized)
 	}
 }
 
