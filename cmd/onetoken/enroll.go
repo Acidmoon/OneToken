@@ -39,7 +39,7 @@ var enrollCmd = &cobra.Command{
   onetoken enroll --base-url https://dashscope.aliyuncs.com --api-key-env DASHSCOPE_API_KEY \
     --protocol auto --model qwen/qwen3-8b --version v1 --vendor dashscope --family qwen
 
-  # 参考只用第一方官方 API（用户裁决 2026-08-06）；OpenRouter 仅作审计目标`,
+  # 参考端点由用户自定（示例用厂商官方 API，可另选信任端点，工具不作规定）`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
 		if err != nil {
