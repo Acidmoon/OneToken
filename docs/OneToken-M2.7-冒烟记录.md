@@ -31,15 +31,17 @@
 
 ## 3. 真实云端试点指引（待用户执行）
 
+> **参考通道裁决（用户 2026-08-06）**：参考指纹**用厂商第一方官方 API，不指定 OpenRouter**（聚合器多上游路由致参考分布不稳定）；OpenRouter 仅作审计目标。
+
 试点需真实密钥（环境变量），按设计 §9.2：
 
 ```bash
-# 1. 建档（≥2 开源模型，云端 API；如智谱 glm-4.5 / 阿里 qwen）
-export ZHIPU_API_KEY=...; export DASHSCOPE_API_KEY=...
-onetoken enroll --provider zhipu --model zhipu/glm-4.5 --version 2026-08-06v1
+# 1. 建档（≥2 开源模型，第一方官方 API；如阿里 dashscope qwen / 智谱 glm）
+export DASHSCOPE_API_KEY=...; export ZHIPU_API_KEY=...
 onetoken enroll --provider dashscope --model qwen/qwen3-8b --version 2026-08-06v1
+onetoken enroll --provider zhipu --model zhipu/glm-4.5 --version 2026-08-06v1
 
-# 2. 审计 OpenRouter 同名端点（判定与校准后 τ 一致、如实报告距离、不预设 pass）
+# 2. 审计 OpenRouter 同名端点（仅审计目标；判定与校准后 τ 一致、如实报告距离、不预设 pass）
 export OPENROUTER_API_KEY=...
 onetoken audit --provider openrouter --claimed-model qwen/qwen3-8b --k 8 --n 15
 
@@ -49,7 +51,7 @@ onetoken audit --provider openrouter --claimed-model zhipu/glm-4.5 --k 8 --n 15
 
 - 校准库为空时 audit 报 `ErrNoCalibration`——试点期可用 `--tau` 直传（如 0.20，跨 provider 基线 0.2230 量级）或先跑 calibrate（M4.3）。
 - 如实报告：OpenRouter 多上游路由可能致健康端点 fail（论文实测 29% 同模型跨 provider 超出 impostor 区间），属生态事实非实现 bug；审计记录 upstream 字段用于解释。
-- 三协议真实试点：responses（OpenAI/OpenRouter 新端点）/ anthropic（Anthropic）/ chat（其余）各 enroll 一次。
+- 三协议真实试点（enroll 均用第一方官方 API）：responses（OpenAI 官方）/ anthropic（Anthropic 官方）/ chat（智谱/DeepSeek 等第一方 chat 端点）各一次。
 
 ## 4. 已知限制（留痕）
 
