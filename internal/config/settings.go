@@ -32,6 +32,11 @@ type Settings struct {
 	DriftBaseline float64 // 参考噪声底线（论文：0.140）
 	DriftWindow   int     // 趋势窗口（近 N 次）
 
+	// 判定（M2.5，设计 §3.4）
+	TauInconclusiveBuffer float64 // inconclusive 缓冲：|s−τ| ≤ 此值 → 不确定（τ CI 缺口裁决：
+	// 校准未存 τ 自身 CI，用绝对缓冲代替；背景 genuine 中位 0.075 / 跨 provider 0.227，
+	// 默认 0.02 保守小缓冲，需按本地校准数据实测调整）
+
 	// 传输层（M2.2，设计 §10.1）：重试矩阵与成本护栏
 	MaxRetries       int   // 单请求最大重试次数（不含首次；默认 3）
 	RetryBaseDelayMS int   // 指数退避基数（毫秒；默认 500，含 jitter 幅度）
@@ -73,6 +78,8 @@ func DefaultSettings() Settings {
 
 		DriftBaseline: 0.140,
 		DriftWindow:   5,
+
+		TauInconclusiveBuffer: 0.02,
 
 		MaxRetries:       3,
 		RetryBaseDelayMS: 500,

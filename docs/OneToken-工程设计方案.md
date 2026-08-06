@@ -2,7 +2,7 @@
 
 > **依据论文**：《One Token Is Enough: Fingerprinting and Verifying Large Language Models from Single-Token Output Distributions》（arXiv:2607.10252，Tomáš Bruckner）
 >
-> **文档状态**：v0.13（并入 M2.4 detector 实现：Screen 签名具化、测量口径留痕——T0 参考比对取舍/偏好任务豁免/护栏归因/o 系 gate 归属）
+> **文档状态**：v0.14（并入 M2.5 verify 判定：Judge/MatchCalibration/VerifyAudit、τ CI 裁决为绝对缓冲、k_min 双口径裁决、Scope 分档维度）
 > **决策记录**：
 > - 实现语言：**Go**（IO 密集场景，启动毫秒级、单二进制、goroutine 并发天然适配批量采集；开发/迭代快）——用户拍板。
 > - **统一提供商调用层为系统核心**：任意 BaseURL + API Key 即可请求，三种协议适配（OpenAI Responses / OpenAI chat completions 兼容 / Anthropic messages），参考注册（enroll）与待审核模型（audit）共用此层——用户评审意见 1。
@@ -96,7 +96,7 @@
 | `internal/preprocess` | **归一化 + 分类**（valid/invalid/refusal/empty），在采样与探测之前运行 | `NormalizeClassify(raw) → Processed` |
 | `internal/detector` | 测量有效性探测与清洗（依赖 preprocess 分类结果），与 verify 解耦 | `Screen(responses []*store.Response, ScreenOptions) *Result`（M2.4 具化：设计 `Screen(processed)→{ok,flags,cleaned}` 的入参为原始响应（分类可预填或经 TaskForCell 现算），出参 Result 含 5 类 Flags + per-cell 统计 + ValidCells/KMinCells（inconclusive 信号）；cleaned 语义由调用方据 Flags 过滤实现；ScreenOptions：Settings/T0Responses/RefusalBaseline(nil=无)/FailedTasks/TotalTasks/TaskForCell） |
 | `internal/fingerprint` | 分布估计、**基 2 JSD（自写，直接按论文 Eq.1）**、指纹对象（构建自 `store.Fingerprint`） | `Distance(a, b *Fingerprint) (float64, int)`——返回 (距离, 参与 cell 数)，参与数供上层按有效 cell < k_min 判 inconclusive；`Build(responses) (*Fingerprint, error)` |
-| `internal/verify` | 判定：JSD vs τ（按 (k,n,通道) 匹配校准库），含 inconclusive 缓冲 | `Verify(ctx, target Provider, claimed Fingerprint, k, n) → Verdict` |
+| `internal/verify` | 判定：JSD vs τ（按 (k,n,scope,通道) 匹配校准库），含 inconclusive 缓冲 | `VerifyAudit(responses []*store.Response, claimed *store.Fingerprint, Options) (*Result, error)`（M2.5 具化：设计 §2.1 的 `Verify(ctx, target Provider, claimed, k, n)` 为端到端含采集，由 M2.7 CLI 组装；本包交付 `Judge`/`MatchCalibration`/`VerifyAudit`——证据链哈希校验、副本回填、τ 合法性、fail-closed 无共同 cell 判 inconclusive） |
 | `internal/calibrate` | genuine/impostor 试验（分裂半奇偶切分原语）、ROC/AUC/EER、bootstrap CI、(k,n,通道) 分档（M1 范围）；LOO 1-NN 已实现（复现用途，投产路径 v1.2）；UPGMA/ARI（报告，v1.1）为后续里程碑 | `Calibrate(genuine, impostor []float64, opts) → *store.Calibration`（分档键 Scope/K/NPerCell/通道 与 CalibratedAt 由调用方填充；空输入或非有限阈值返回 nil 无效校准）；`SplitHalves` / `LOO1NN` |
 | `internal/reporter` | 距离矩阵、聚类图（v1.1）、单端点报告、告警；**Go `html/template` 默认转义防 XSS** | `Report(auditID) → md/html` |
 | `internal/store` | JSON/JSONL 文件存储：目录布局（§4.1）、原子写（tmp+rename）、JSONL 追加、幂等去重索引、证据链（append-only + raw_sha256）、schema_version 校验 | SaveAudit / AppendResponse / LoadResponses / SaveFingerprint / ... |
@@ -176,7 +176,9 @@ Unicode NFC → 剥离标点/引号 → 大小写折叠 → 阿拉伯-印度/中
 - **genuine 试验**：同一模型参考指纹与目标端点的分裂半对（按重复奇偶切分）→ 分布 D_genuine；
 - **impostor 试验**：模型 X 指纹 vs 模型 Y 指纹（Y≠X）→ 分布 D_impostor；
 - 输出：ROC 曲线、AUC、EER、τ_fpr1 / τ_fpr5、各自 TPR 与 bootstrap CI；
-- **分档维度**：(k_cells, n_per_cell, ref_channel, target_channel) × (global / family / size-tier)；审计时精确匹配，无匹配档时强制全电池校准或拒绝审计；
+- **分档维度**：(k_cells, n_per_cell, scope, ref_channel, target_channel) × (global / family / size-tier)；审计时精确匹配（Scope 为空串只命中空 Scope 档，防 global/family 同键误配），无匹配档时强制全电池校准或拒绝审计（实现选拒绝，`ErrNoCalibration`）；
+- **τ CI 缺口裁决（M2.5）**：校准未存 τ 自身 CI，inconclusive 缓冲采用**绝对缓冲** `TauInconclusiveBuffer`（默认 0.02；背景 genuine 中位 0.075 / 跨 provider 0.227，需按本地校准数据实测调整）——判定：s ≤ τ−buf → pass；s > τ+buf → suspicious；|s−τ| ≤ buf → inconclusive；
+- **k_min 双口径裁决（M2.5）**：门槛以 B′ 参与 cell 数 `cellsUsed`（fingerprint.Distance 返回值）为准（与 §2.1 一致）；detector 的 ValidCells（审计侧计数）仅作报告；**fail-closed：无共同可比较 cell（cellsUsed=0）判 inconclusive，不得判 pass**；校准档 τ 须有限且 ∈ [0,1]（读侧校验，防篡改/损坏静默改变结论）；
 - ROC/AUC/EER/UPGMA/ARI/1-NN **Go 自写**（各几十行），须单测：perfect/random 分类器 AUC=1/0.5 的构造性校验。
 
 ### 3.5 谱系辅助信号（标注 v1.2，可选）
