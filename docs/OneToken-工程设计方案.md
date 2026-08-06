@@ -2,7 +2,7 @@
 
 > **依据论文**：《One Token Is Enough: Fingerprinting and Verifying Large Language Models from Single-Token Output Distributions》（arXiv:2607.10252，Tomáš Bruckner）
 >
-> **文档状态**：v0.11（并入 M2.2 传输层实现：重试矩阵/限流/成本护栏/SSRF 落地与已知局限、Provider 接口契约确认）
+> **文档状态**：v0.12（并入 M2.3 collector 实现：RunBattery 签名具化、密钥回显拒收）
 > **决策记录**：
 > - 实现语言：**Go**（IO 密集场景，启动毫秒级、单二进制、goroutine 并发天然适配批量采集；开发/迭代快）——用户拍板。
 > - **统一提供商调用层为系统核心**：任意 BaseURL + API Key 即可请求，三种协议适配（OpenAI Responses / OpenAI chat completions 兼容 / Anthropic messages），参考注册（enroll）与待审核模型（audit）共用此层——用户评审意见 1。
@@ -92,7 +92,7 @@
 |---|---|---|
 | `internal/provider` | **统一调用层（§6）**：三协议适配、协议协商、单请求级重试（429/5xx 分类、Retry-After 解析、jitter）、逐响应元数据、响应字节/完成长度上限、成本护栏 | `type Provider interface { Complete(ctx, Req) (*ResponseRecord, error) }` |
 | `internal/battery` | 40-cell 探针电池定义与提示词加载（与配置分离） | `Battery`（10 任务 × 4 语言，cell 清单） |
-| `internal/collector` | 并发采集：worker pool（per-provider 并发上限 4–8）、幂等键、可恢复续采、种子打乱、限流预算、失败重试与总 deadline | `RunBattery(ctx, provider, cells, n, T) → []Raw` |
+| `internal/collector` | 并发采集：worker pool（per-provider 并发上限 4–8，硬上限 256）、幂等键、可恢复续采、种子打乱、限流预算、失败重试与总 deadline | `RunBattery(ctx, provider.Provider, *store.Store, *battery.Battery, cells []string, n int, T float64, Options) ([]*store.Response, error)`（M2.3 具化：幂等续采需 store 索引、提示词组装需 battery、并发/预算/进度经 Options；`[]Raw` 具化为 `[]*store.Response` 含证据链哈希与元数据） |
 | `internal/preprocess` | **归一化 + 分类**（valid/invalid/refusal/empty），在采样与探测之前运行 | `NormalizeClassify(raw) → Processed` |
 | `internal/detector` | 测量有效性探测与清洗（依赖 preprocess 分类结果），与 verify 解耦 | `Screen(processed) → {ok, flags, cleaned}` |
 | `internal/fingerprint` | 分布估计、**基 2 JSD（自写，直接按论文 Eq.1）**、指纹对象（构建自 `store.Fingerprint`） | `Distance(a, b *Fingerprint) (float64, int)`——返回 (距离, 参与 cell 数)，参与数供上层按有效 cell < k_min 判 inconclusive；`Build(responses) (*Fingerprint, error)` |
@@ -369,6 +369,8 @@ type ResponseRecord struct {
 **安全性（语言无关，Go 实现时强制）**：禁用重定向（`http.Client{CheckRedirect: 返回 http.ErrUseLastResponse}`，显式配置，§10）；scheme 校验（https，localhost 例外）；**SSRF 拦截范围**：RFC1918（10/8、172.16/12、192.168/16）、环回 127/8、链路本地 169.254/16、CGNAT 100.64/10、IPv6 ::1 与 fc00::/7、多播/未指定/受限广播与保留段（实现补全，§10.1），可配置白名单 `ssrf_allow`；**DNS rebinding 防护**：DialContext 中对解析出的每个 IP 先校验再拨号（解析→校验→连接，用解析后的 IP 拨号消除 TOCTOU）；base_url 与密钥绑定校验（防止把 A 厂商密钥误配到恶意 base_url）；日志/异常脱敏（Authorization 头永不落日志；**错误消息对响应体执行密钥回显擦洗**，M2.2 审查 H1）。
 
 **SSRF 已知局限（M2.2 实现确认）**：① 环回地址（127/8、::1）恒放行且无法配置禁用——本地部署通道（vLLM/Ollama）为设计认可的合法场景，与 scheme 校验的 localhost 例外一致；② 系统代理（HTTP_PROXY/HTTPS_PROXY，默认保留 `ProxyFromEnvironment`）下目标主机由代理转发，不经过 DialContext 校验——代理为用户显式信任实体；若代理本身位于内网，需将其地址加入 `ssrf_allow`；③ 重试退避中的单请求超时（`http.Client.Timeout`）判终止不重试（保守策略，防慢端点重复计费），慢端点恢复由审计级重试处理。
+
+**密钥回显拒收（M2.3 实现确认）**：检测对象端点可能恶意/顶替——若端点在**成功响应体**（200）里回显请求的 `Authorization`/`x-api-key`（`ErrSecretEchoed`，provider 层检测），该样本拒收不落库（密钥永不落盘基线 §10.1；不篡改 raw，证据链完整性优先）；错误路径的响应体密钥回显擦洗（redactBody：先擦洗后截断，防截断边界泄露密钥前缀）。
 
 ---
 

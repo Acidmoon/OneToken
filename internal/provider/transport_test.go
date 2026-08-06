@@ -474,6 +474,56 @@ func TestRetryAfterOverflowClamped(t *testing.T) {
 	}
 }
 
+// ---- 密钥回显拒收（审查 S-H1）与擦洗边界（审查 S-M5） ----
+
+func TestCompleteSecretEchoRejected(t *testing.T) {
+	// 恶意端点把密钥回显进 200 成功响应体：样本拒收（不落库），不重试
+	const secret = "sk-echo-secret-456"
+	var n atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n.Add(1)
+		body := `{"choices":[{"message":{"content":"` + secret + `"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":1}}`
+		w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	cfg := testConfig(srv.URL, "chat")
+	cfg.SetAPIKey(secret)
+	c, err := NewClientWithSettings(cfg, nil, testSettings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Complete(context.Background(), reqParams("m"))
+	if !errors.Is(err, ErrSecretEchoed) {
+		t.Fatalf("应报 ErrSecretEchoed，实际 %v", err)
+	}
+	if n.Load() != 1 {
+		t.Fatalf("拒收不应重试，实际请求 %d 次", n.Load())
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("错误消息泄露密钥: %v", err)
+	}
+}
+
+func TestRedactBodyTruncationBoundary(t *testing.T) {
+	// 密钥跨越 512B 截断边界：先擦洗后截断，不得泄露密钥前缀（审查 S-M5）
+	const secret = "sk-boundary-secret-1234567890"
+	cfg := testConfig("https://example.com", "chat")
+	cfg.SetAPIKey(secret)
+	c, err := NewClientWithSettings(cfg, nil, testSettings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 填充使密钥恰好跨过 maxErrBody 边界（旧实现先截后擦会泄露前缀）
+	body := []byte(strings.Repeat("a", maxErrBody-8) + secret + strings.Repeat("b", 100))
+	out := c.redactBody(body)
+	if strings.Contains(out, secret) {
+		t.Fatalf("截断边界泄露密钥: %q", out)
+	}
+	if len(out) > maxErrBody+len("…") {
+		t.Fatalf("输出超限: %d", len(out))
+	}
+}
+
 func TestBuildHTTPRequestProtectedHeaders(t *testing.T) {
 	// extraHeaders 不得覆盖认证/内容类型/协议版本头（审查 S-L5）
 	req, err := BuildHTTPRequest("https://api.anthropic.com", ProtocolAnthropic,

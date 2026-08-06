@@ -1,6 +1,7 @@
 // per-provider 限流预算（设计 §10.1-4、§6.1 limits）：
 // RPM（每分钟）匀速令牌桶 + RPD（每日）UTC 日窗口，0 = 不限。
-// 并发上限 MaxConcurrency 由 M2.3 collector 的 worker pool 使用（Limits 已配置）。
+// 并发上限 MaxConcurrency 由 CLI 层读取并传给 collector.Options.Concurrency
+// （M2.7 接线；collector 有独立硬上限 256）。
 //
 // 时钟可注入（now/sleep），便于确定性单测。
 package provider

@@ -73,6 +73,7 @@ func isRetryableErr(err error) bool {
 		errors.Is(err, ErrResponseTooLarge),
 		errors.Is(err, ErrCompletionTooLong),
 		errors.Is(err, ErrBadResponse),
+		errors.Is(err, ErrSecretEchoed),
 		errors.Is(err, ErrBudgetExceeded),
 		errors.Is(err, ErrSSRFBlocked),
 		errors.Is(err, ErrKeyRejected),

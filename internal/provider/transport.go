@@ -210,6 +210,12 @@ func (c *Client) doOnce(ctx context.Context, proto Protocol, rp RequestParams) (
 		// 避免解析失败被当网络瞬态放大请求（审查 M2/L4）。
 		return nil, fmt.Errorf("%w: %v", ErrBadResponse, err)
 	}
+	// 密钥回显检测（审查 S-H1）：恶意/顶替端点可能在 200 成功响应体里回显
+	// Authorization/x-api-key。若原样落库则密钥进入证据链文件（违§10.1 基线）。
+	// 拒收样本（不篡改 raw，证据链完整性优先）；错误消息不含密钥内容。
+	if key := c.cfg.APIKey(); key != "" && strings.Contains(rec.RawCompletion, key) {
+		return nil, fmt.Errorf("%w（%s）", ErrSecretEchoed, c.cfg.Name)
+	}
 	rec.LatencyMS = time.Since(start).Milliseconds()
 
 	// 成本护栏②：completion 长度上限（端点忽略 max_tokens 的确定性信号；
@@ -224,14 +230,15 @@ func (c *Client) doOnce(ctx context.Context, proto Protocol, rp RequestParams) (
 	return rec, nil
 }
 
-// redactBody 限量截断响应体并擦洗密钥回显（审查 H1）：恶意/误配端点可能
-// 在错误体里回显 Authorization 值，任何错误路径（含重试耗尽包装）都经此清洗。
+// redactBody 擦洗并限量截断错误响应体（审查 S-H1/M5）：
+// 恶意/误配端点可能在错误体里回显 Authorization 值；先对完整 body 擦洗密钥，
+// 再截断（先截后擦会让密钥跨越截断边界而泄露前缀）。
 func (c *Client) redactBody(b []byte) string {
-	s := truncate(b, maxErrBody)
+	s := string(b)
 	if key := c.cfg.APIKey(); key != "" {
 		s = strings.ReplaceAll(s, key, "[REDACTED]")
 	}
-	return s
+	return truncate([]byte(s), maxErrBody)
 }
 
 // ---- 小工具 ----

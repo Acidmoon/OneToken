@@ -27,6 +27,9 @@ var (
 	ErrBudgetExceeded = errors.New("provider: 审计预算超限")
 	// ErrBadResponse 响应体解析失败（200 但非 JSON / 结构不符），确定性错误不重试。
 	ErrBadResponse = errors.New("provider: 响应解析失败（确定性错误，不重试）")
+	// ErrSecretEchoed 端点把请求密钥回显进成功响应体（恶意/顶替端点行为）：
+	// 拒收样本不落库（密钥永不落盘基线 §10.1；审查 S-H1）。
+	ErrSecretEchoed = errors.New("provider: 端点回显请求密钥，样本拒收")
 )
 
 // HTTPError 携带 HTTP 状态码与限量响应体片段的可重试错误。
