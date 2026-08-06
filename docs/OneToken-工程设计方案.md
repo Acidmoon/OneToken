@@ -2,13 +2,13 @@
 
 > **依据论文**：《One Token Is Enough: Fingerprinting and Verifying Large Language Models from Single-Token Output Distributions》（arXiv:2607.10252，Tomáš Bruckner）
 >
-> **文档状态**：v0.17（参考通道裁决补正：用户 2026-08-06——参考不指定 OpenRouter，仅用厂商第一方官方 API；聚合器只作审计目标；§7.2/§7.3/§9.2 同步）
+> **文档状态**：v0.18（参考来源裁决补正：用户 2026-08-06——参考端点由用户自定，工具不作规定（不指定、也不禁止任何 provider）；§7.2/§7.3/§9.2 同步）
 > **决策记录**：
 > - 实现语言：**Go**（IO 密集场景，启动毫秒级、单二进制、goroutine 并发天然适配批量采集；开发/迭代快）——用户拍板。
 > - **统一提供商调用层为系统核心**：任意 BaseURL + API Key 即可请求，三种协议适配（OpenAI Responses / OpenAI chat completions 兼容 / Anthropic messages），参考注册（enroll）与待审核模型（audit）共用此层——用户评审意见 1。
 > - **存储：分目录 JSON/JSONL 文件存储，替代 SQLite**（用户评审决议 v0.5）——单用户 CLI、数据按语义分片、导入导出与开放共享；响应按审计分片为 JSONL 追加，避免单大文件全量读写；详见 §4。
 > - 参考指纹通道：**单通道——只走云端 API**（用户决策 2026-08-06；不做本地部署参考），厂商官方 / 聚合器 API 一律经统一调用层；参考指纹标注来源 provider 与模型版本（§7）。
-> - 首个试点目标：**第一方官方 API 建档**（Qwen3-8B 等 ≥2 开源模型经厂商官方 API，参考不指定 OpenRouter）→ OpenRouter 同名端点审计（§9.2）。
+> - 首个试点目标：云端 API 建档（Qwen3-8B 等 ≥2 开源模型，**参考端点由用户自定**）→ 同名端点审计（§9.2）。
 > - 操作点：默认误报优先（τ 对应 FPR≈1%），附 τ_fpr5 辅评估点；阈值按 (k, n, 通道) 分档存储（§3.4、§4）。
 > - **M1.5 前置门 pin 结果（v0.9）**：论文软件归档（Zenodo 21278793）核对完成——JSD 基 2、**原始标度（不取 sqrt）**、0·ln0=0 无平滑、cell 双方 ≥10 有效样本、R pROC 做 ROC/EER；与 Go 实现（M1.3/M1.4）完全一致，零改动；采样参数（T=1.0 n=30、T=0 n=3、前沿 n=15、max_tokens=16、四语言）与 §P0.3 一致；详见 `docs/OneToken-M1.5-语义pin记录.md`。
 
@@ -402,13 +402,12 @@ type ReferenceSource interface {
 
 **通道的实质是"ProviderConfig + 端点溯源"，而非独立采集代码**——云端单通道经统一调用层复用同一套采集/归一化/探测器/指纹管线；参考指纹标注来源 provider 与模型版本（服务栈差异基线用，§7.4）。
 
-### 7.2 通道：厂商官方 API（OfficialAPI，唯一通道；用户裁决 2026-08-06：参考不指定 OpenRouter）
+### 7.2 通道：云端 API（用户自定参考来源；工具不作规定）
 
-- **参考来源 = 第一方官方 API**：OpenAI / Anthropic / 智谱 / DeepSeek / 百度等厂商官方端点，**一律经统一调用层**（§6），协议按厂商自动/显式协商；
-- **聚合器（OpenRouter 等）不作参考来源**：多上游路由使参考分布不稳定（R4）——仅作**审计目标**（待验证端点，§9.2 试点）。`--provider openrouter` 只用于 audit/probe，不用于 enroll 参考建档；
-- **约束**：**无第一方官方 API 的模型（本地私有权重 / 聚合器独家）无法建立参考指纹**（→ §3.5 降级为端点间互比）；闭源模型（GPT/Claude 系列）只能经官方 API；
+- **参考来源由用户自定**（用户裁决 2026-08-06 补正）：enroll 的参考端点**不作规定**——用户可选用厂商官方 API（OpenAI / Anthropic / 智谱 / DeepSeek / 阿里 dashscope 等）或任何信任的云端端点（含 OpenRouter 等聚合器）；一律经统一调用层（§6），协议按厂商自动/显式协商。工具只保证管线中立（enroll/audit 同构），**不推荐、不禁止**特定参考 provider；
+- **风险提示（用户自行权衡）**：聚合器（OpenRouter 等）多上游路由可能使参考分布不稳定（R4，跨 provider 中位 0.227）——若选聚合器作参考，建议结合同 provider 比对与校准后 τ；参考指纹**标注来源 provider**（enroll 的 ProviderName 字段），验证优先同 provider 比对；
+- **约束**：**无可用云端 API 的模型（本地私有权重 / 无任何可及云端端点）无法建立参考指纹**（→ §3.5 降级为端点间互比）；闭源模型（GPT/Claude 系列）只能经其官方 API；
 - **成本**：每模型指纹采集按论文普查量级 ≈ $0.21/模型平均（1320 查询 ≈ $0.14）；前沿定价模型**工程外推** $1–5（非论文数据，待实测修正，R8）；
-- **风险**：云端 API 本身 serving 栈有分布差异（论文：gpt-4 跨 Azure vs OpenAI 达 0.392；跨 provider 中位 0.227，M1.6 实测 0.2230）——参考指纹**标注来源 provider**，验证优先同 provider 比对；跨 provider 比对用校准后的 τ（论文跨 provider AUC 0.880 而非 0.971）。
 
 > **原 LocalHost 通道（v0.14 及以前）**：本地部署 vLLM/Ollama 建档（vLLM 优先、Ollama 受限需同权重形状校验、权重哈希记录）——用户决策不采用，保留本条仅为历史留痕。
 
@@ -416,8 +415,8 @@ type ReferenceSource interface {
 
 | 声称模型类型 | 参考指纹来源 | 备注 |
 |---|---|---|
-| 有第一方官方 API（开源或闭源） | 厂商官方 API | 经统一调用层；标注 provider 与模型版本 |
-| 仅聚合器可及（无第一方 API） | 无 → 降级为端点间互比 | 聚合器多上游路由不作参考（分布不稳定）；只能给"最接近家族"线索（§3.5） |
+| 有可用云端 API（第一方或聚合器） | **用户自定**（enroll 的参考端点不作规定） | 经统一调用层；标注 provider 与模型版本；聚合器参考需用户自行权衡多上游路由风险 |
+| 无可用云端 API（本地私有 / 无端点可及） | 无 → 降级为端点间互比 | 只能给"最接近家族"线索（§3.5） |
 
 ### 7.4 单通道语义（明确裁决）
 
@@ -484,7 +483,7 @@ onetoken drift --model qwen/qwen3-8b
 
 ### 9.2 里程碑 M2：云端通道冒烟
 
-- 试点：**第一方官方 API 建档** **Qwen3-8B** 等（≥2 个开源模型，如阿里 dashscope / 智谱 zhipu / DeepSeek 官方端点）；**统一调用层三协议各跑通一次 enroll**（openai-responses / anthropic / 其他第一方 chat 端点），验证协议协商与 ResponseRecord 收敛；OpenRouter 仅作同名端点审计目标；
+- 试点：云端 API 建档 **Qwen3-8B** 等（≥2 个开源模型；**参考端点由用户自定**——示例用厂商官方 API，用户可另选信任端点）；**统一调用层三协议各跑通一次 enroll**（openai-responses / anthropic / 其他 chat 端点），验证协议协商与 ResponseRecord 收敛；
 - 对 OpenRouter 同名端点 audit，**验收标准为"判定与跨通道校准后 τ 一致"，如实报告实际距离**——不预设"必须 pass"：论文实测 29% 同模型跨 provider 对超出 impostor 区间、OpenRouter 多上游路由可能造成审计不稳定，健康端点也可能 fail（生态事实而非实现 bug）；审计响应记录上游 provider 字段用于解释不稳定；
 - 用**不同模型**端点冒充 → 期望 suspicious（impostor）；
 - 验收：探测器 flag 正确性断言（reasoning_tokens、T=0 探针、缓存签名、有效率、hidden-reasoning）。
