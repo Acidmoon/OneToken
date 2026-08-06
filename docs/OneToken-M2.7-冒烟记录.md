@@ -59,3 +59,21 @@ onetoken audit --provider openrouter --claimed-model zhipu/glm-4.5 --k 8 --n 15
 - `--tau` 直传为设计外扩展（冒烟/临时），决策已记入实施计划 §7
 - SIGINT 无优雅中止（响应逐条落盘数据安全；M4.1 接入 signal）
 - 探测器 flag 与有效率随 audit 落盘（audits/<id>.json QCFlags/CellsDetail）
+
+## 5. 真实云端试点结果（2026-08-06，DeepSeek）
+
+**结论：DeepSeek 当前 API 两个模型均为推理模型，不可指纹化——探测器在真实端点正确排除（论文方法论验证）。**
+
+| 项目 | 结果 |
+|---|---|
+| 端点 | `https://api.deepseek.com`（chat 协议，base_url 不含 /v1 ✓） |
+| 可用模型 | `deepseek-v4-flash` / `deepseek-v4-pro` |
+| 建档尝试（v4-flash） | ❌ **hidden-reasoning 拒绝**（1320 查询完成，探测器拦截） |
+| 响应明细 | `reasoning_tokens=16`（输出全占）、`finish_reason=length`、`content=''`（无实际回答） |
+| 请求参数 | 已传 `reasoning_effort: minimal`——DeepSeek 忽略（v4 为深度思考模型，无法关闭推理） |
+| 判定 | 符合设计 §1.2/§5：`reasoning_tokens>0` 或 `finish=length` 即确定性证据 → 隐藏推理端点按论文排除，不可指纹化 |
+
+**意义**：
+1. 探测器 5 类 flag 的 `hidden-reasoning` 在真实端点**首次验证**——正确识别推理模型并拒绝建档（参考源不可信）；
+2. 单 token 指纹法不适用于推理模型（输出被推理占满，无直接采样分布）——这是论文明确的适用边界，非实现缺陷；
+3. 试点需**非推理模型端点**：如智谱 glm-4.5 系列、阿里 qwen 系列（非 thinking 版）、OpenAI gpt-4o-mini/gpt-5-mini 等（用户自选参考端点）。
