@@ -2,7 +2,7 @@
 
 > **依据论文**：《One Token Is Enough: Fingerprinting and Verifying Large Language Models from Single-Token Output Distributions》（arXiv:2607.10252，Tomáš Bruckner）
 >
-> **文档状态**：v0.18（参考来源裁决补正：用户 2026-08-06——参考端点由用户自定，工具不作规定（不指定、也不禁止任何 provider）；§7.2/§7.3/§9.2 同步）
+> **文档状态**：v0.19（两套系统决策：用户 2026-08-06——保留论文原方法（非推理 direct 通道）+ 新增推理通道（post-reasoning 回答指纹，DeepSeek 实测可行性证实）；§1.2/§3.1/§5/§7/§9.2 同步）
 > **决策记录**：
 > - 实现语言：**Go**（IO 密集场景，启动毫秒级、单二进制、goroutine 并发天然适配批量采集；开发/迭代快）——用户拍板。
 > - **统一提供商调用层为系统核心**：任意 BaseURL + API Key 即可请求，三种协议适配（OpenAI Responses / OpenAI chat completions 兼容 / Anthropic messages），参考注册（enroll）与待审核模型（audit）共用此层——用户评审意见 1。
@@ -36,7 +36,9 @@
 | 测量有效性探测（温度、推理、缓存签名） | 端到端鉴权/权限体系（v2 讨论） |
 | 调度、告警、报告、指纹漂移管理 | — |
 
-\* 论文同样排除强制隐藏推理端点；Responses API 的 `reasoning_tokens` 显式统计提供确定性证据，`reasoning.effort` 最低档（minimal/low）为**候选实验路径**——仅当实测目标模型接受最低档且 usage 显示 `reasoning_tokens=0` 时才可指纹化，否则按论文排除（o 系实测拒绝 "none"，该取值不作为任何协议的主取值）；post-reasoning 通道指纹化列为未来扩展。
+\* 论文同样排除强制隐藏推理端点；Responses API 的 `reasoning_tokens` 显式统计提供确定性证据，`reasoning.effort` 最低档（minimal/low）为**候选实验路径**——仅当实测目标模型接受最低档且 usage 显示 `reasoning_tokens=0` 时才可指纹化，否则按论文排除（o 系实测拒绝 "none"，该取值不作为任何协议的主取值）。
+
+> **两套系统决策（v0.19，用户裁决 2026-08-06）**：post-reasoning 通道由「未来扩展」升级为**系统 2（推理通道）**——保留论文原方法（系统 1：非推理端点直接采样指纹），新增推理端点适配：加大 `max_tokens` 使思考链 + 最终回答完整输出，以**思考后回答（post-reasoning content）分布**为指纹对象（`reasoning_tokens` 显式分离推理/回答 token）。**可行性已实测（DeepSeek v4-flash/pro）**：max_tokens=512 时 reasoning=35 + answer 完整、finish=stop；思考后回答分布呈模型特异性（flash 偏好 42、pro 偏好 73，8 次采样可区分）。两套系统共用同一管线（采集/归一化/指纹/JSD），仅**采集参数（max_tokens）与通道分档（reasoning）**不同。
 
 ### 1.3 核心设计原则（第一性原理）
 
@@ -140,7 +142,7 @@ audit 阶段（高频，如每日）：
 | 随机城市 | 开 | ×4 |
 | 抛硬币 | 闭（2） | ×4 |
 
-- 采集参数：`temperature=1.0`，输出上限 16 token（论文 12→16 的最终值，各协议按命名映射：chat 用 `max_tokens`、responses 用 `max_output_tokens`、Anthropic 必填 `max_tokens`），固定 system 提示强制一词回答，尽力禁用推理（chat 传顶层 `reasoning_effort` 最低档、Responses 传 `reasoning:{effort:"minimal"}`、Anthropic 传 `thinking:{type:"disabled"}`）——具体取值与支持性由 §6.2 能力探测确认，o 系若拒绝最低档则按论文排除；
+- 采集参数：`temperature=1.0`，输出上限 16 token（论文 12→16 的最终值，各协议按命名映射：chat 用 `max_tokens`、responses 用 `max_output_tokens`、Anthropic 必填 `max_tokens`），固定 system 提示强制一词回答，尽力禁用推理（chat 传顶层 `reasoning_effort` 最低档、Responses 传 `reasoning:{effort:"minimal"}`、Anthropic 传 `thinking:{type:"disabled"}`）——具体取值与支持性由 §6.2 能力探测确认，o 系若拒绝最低档则按论文排除；**推理通道（系统 2，v0.19）**：实测 `reasoning_tokens>0` 的端点改用 `max_tokens=512`（Settings.ReasoningMaxTokens），使思考链 + 最终回答完整输出，指纹对象为 post-reasoning 回答（content），`reasoning_tokens` 显式分离；
 - 每个 cell 采样 **n=30**（T=1.0）建立参考指纹 + **n=3**（T=0）确定性变体（论文配置）；**前沿定价模型（≥$5/1M input tokens，论文定义）**T=1.0 采样减为 15；
 - 审计模式（轻量）：k ∈ {8, 16} 个随机 cell 子集 × n=15。
 
@@ -295,7 +297,9 @@ data/                              # 根目录可配置（默认 ~/.onetoken/dat
 | **有效率/拒答** | preprocess 分类统计 | **cell 级门槛采用论文规则**：双方 ≥10 有效样本才进入 JSD 平均（论文 Eq.1）；`valid 率 < 80%` 仅作**模型级 QC 指标**（论文试点 per-model 标准，非按 cell 弃用）；refusal 率突变 → `safety-layer-change` |
 | **端点可达性** | 重试统计 | 持续失败 → `unreachable`（论文：5+1 个端点损耗先例）；审计侧有效 cell 数 < k_min 时判 **inconclusive** |
 
-被标记 `hidden-reasoning` / `response-caching` / `temperature-not-honored` 的测量**不进入指纹与判定**，且自身即告警项。
+被标记 `response-caching` / `temperature-not-honored` 的测量**不进入指纹与判定**，且自身即告警项。
+
+**`hidden-reasoning` 语义（v0.19 两套系统裁决）**：不再纯排除——`reasoning_tokens>0` 或 `finish_reason=="length"` 时标记该端点**属推理通道**：① 建档（enroll）侧以推理参数（max_tokens=ReasoningMaxTokens）重采，验证 post-reasoning 回答可提取（content 非空、finish=stop）后才建档；② 重采后仍无回答 → 按论文排除（参考源不可指纹化）；③ 指纹标注通道 `reasoning`（RefChannel/TargetChannel 分档，τ 单独校准）；④ 审计侧同通道比对。
 
 **M2.4 实现口径（v0.13 留痕）**：
 - **截断信号跨协议**：OpenAI `finish_reason=="length"` 与 Anthropic `stop_reason=="max_tokens"`、Responses 新版 `max_output_tokens` 均计截断（hidden-reasoning 确定性证据）；
@@ -405,6 +409,7 @@ type ReferenceSource interface {
 ### 7.2 通道：云端 API（用户自定参考来源；工具不作规定）
 
 - **参考来源由用户自定**（用户裁决 2026-08-06 补正）：enroll 的参考端点**不作规定**——用户可选用厂商官方 API（OpenAI / Anthropic / 智谱 / DeepSeek / 阿里 dashscope 等）或任何信任的云端端点（含 OpenRouter 等聚合器）；一律经统一调用层（§6），协议按厂商自动/显式协商。工具只保证管线中立（enroll/audit 同构），**不推荐、不禁止**特定参考 provider；
+- **通道分档（v0.19 两套系统）**：通道维度扩展为 `direct`（非推理，论文原方法）与 `reasoning`（推理端点，post-reasoning 回答指纹）——两通道指纹对象相同（回答分布）、采集参数与校准基线不同，**分别校准 τ、同通道比对**（推理通道 genuine/impostor 距离基线独立测定）；
 - **风险提示（用户自行权衡）**：聚合器（OpenRouter 等）多上游路由可能使参考分布不稳定（R4，跨 provider 中位 0.227）——若选聚合器作参考，建议结合同 provider 比对与校准后 τ；参考指纹**标注来源 provider**（enroll 的 ProviderName 字段），验证优先同 provider 比对；
 - **约束**：**无可用云端 API 的模型（本地私有权重 / 无任何可及云端端点）无法建立参考指纹**（→ §3.5 降级为端点间互比）；闭源模型（GPT/Claude 系列）只能经其官方 API；
 - **成本**：每模型指纹采集按论文普查量级 ≈ $0.21/模型平均（1320 查询 ≈ $0.14）；前沿定价模型**工程外推** $1–5（非论文数据，待实测修正，R8）；
@@ -485,6 +490,7 @@ onetoken drift --model qwen/qwen3-8b
 
 - 试点：云端 API 建档 **Qwen3-8B** 等（≥2 个开源模型；**参考端点由用户自定**——示例用厂商官方 API，用户可另选信任端点）；**统一调用层三协议各跑通一次 enroll**（openai-responses / anthropic / 其他 chat 端点），验证协议协商与 ResponseRecord 收敛；
 - 对 OpenRouter 同名端点 audit，**验收标准为"判定与跨通道校准后 τ 一致"，如实报告实际距离**——不预设"必须 pass"：论文实测 29% 同模型跨 provider 对超出 impostor 区间、OpenRouter 多上游路由可能造成审计不稳定，健康端点也可能 fail（生态事实而非实现 bug）；审计响应记录上游 provider 字段用于解释不稳定；
+- **推理通道试点（v0.19 实测，DeepSeek）**：deepseek-v4-flash/pro 均为推理模型（reasoning_tokens 占满 16 预算、finish=length）——系统 1 直接排除；系统 2 以 max_tokens=512 重采拿到 post-reasoning 回答（flash 偏好 42、pro 偏好 73，8 次采样分布可区分）——**推理通道指纹化可行性已证实**，判别力需 n=30 级校准测定（M2.9）；
 - 用**不同模型**端点冒充 → 期望 suspicious（impostor）；
 - 验收：探测器 flag 正确性断言（reasoning_tokens、T=0 探针、缓存签名、有效率、hidden-reasoning）。
 
