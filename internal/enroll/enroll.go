@@ -44,7 +44,7 @@ type Options struct {
 	Battery  *battery.Battery
 
 	ModelID   string // 模型标识（如 qwen/qwen3-8b）
-	Vendor    string // 厂商（如 zhipu / deepseek / openrouter）
+	Vendor    string // 厂商（如 zhipu / dashscope / deepseek；参考只用第一方官方 API，不用聚合器）
 	Family    string // 模型家族（如 qwen）
 	ModelType string // open-source | proprietary
 	Version   string // 指纹版本（如 2026-08-06v1；同 model_id+version 冲突）

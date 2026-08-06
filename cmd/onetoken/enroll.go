@@ -36,8 +36,10 @@ var enrollCmd = &cobra.Command{
 
 密钥一律走环境变量（--api-key-env 引用的环境变量），永不落盘/落日志。`,
 	Example: `  onetoken enroll --provider zhipu --model zhipu/glm-4.5 --version 2026-08-06v1
-  onetoken enroll --base-url https://openrouter.ai --api-key-env OPENROUTER_API_KEY \
-    --protocol auto --model qwen/qwen3-8b --version v1 --vendor qwen --family qwen`,
+  onetoken enroll --base-url https://dashscope.aliyuncs.com --api-key-env DASHSCOPE_API_KEY \
+    --protocol auto --model qwen/qwen3-8b --version v1 --vendor dashscope --family qwen
+
+  # 参考只用第一方官方 API（用户裁决 2026-08-06）；OpenRouter 仅作审计目标`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
 		if err != nil {
