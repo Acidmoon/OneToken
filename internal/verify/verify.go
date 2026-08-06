@@ -56,6 +56,9 @@ type Options struct {
 	TargetChannel string
 	// RefusalBaseline 参考指纹 refusal 率（safety-layer-change 基线；nil=跳过）。
 	RefusalBaseline *float64
+	// TauOverride 直传阈值（>0 时跳过校准库匹配，直接以该值判定；冒烟/临时场景，
+	// 如试点无校准库。正常审计保持 0=auto 查库）。须有限且 ∈ [0,1]。
+	TauOverride float64
 	// T0Responses 可选 T=0 探针响应（temperature-not-honored 检测）。
 	T0Responses []*store.Response
 	// FailedTasks/TotalTasks 采集失败统计（unreachable）。
@@ -209,7 +212,17 @@ func VerifyAudit(responses []*store.Response, claimed *store.Fingerprint, opts O
 		return res, nil
 	}
 
-	// 6. 校准档匹配（设计 §3.4：按请求 k/n/scope/通道精确匹配，无档拒绝审计）
+	// 6. 判定（设计 §3.4）
+	if opts.TauOverride > 0 {
+		// 直传阈值模式（冒烟/临时）：跳过校准库匹配，τ 合法性校验同档。
+		if !finite01(opts.TauOverride) {
+			return nil, fmt.Errorf("verify: --tau=%v 非法（JSD 值域 [0,1]）", opts.TauOverride)
+		}
+		res.Threshold = opts.TauOverride
+		res.Verdict = Judge(score, opts.TauOverride, opts.Settings.TauInconclusiveBuffer)
+		return res, nil
+	}
+	// 校准档匹配（设计 §3.4：按请求 k/n/scope/通道精确匹配，无档拒绝审计）
 	cal := MatchCalibration(opts.Calibrations, opts.K, opts.N, opts.Scope,
 		opts.RefChannel, opts.TargetChannel)
 	if cal == nil {
@@ -223,8 +236,6 @@ func VerifyAudit(responses []*store.Response, claimed *store.Fingerprint, opts O
 	}
 	res.Calibration = cal
 	res.Threshold = cal.TauFPR1
-
-	// 7. 判定三分支
 	res.Verdict = Judge(score, cal.TauFPR1, opts.Settings.TauInconclusiveBuffer)
 	return res, nil
 }

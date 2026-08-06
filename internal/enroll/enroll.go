@@ -148,13 +148,26 @@ func Enroll(ctx context.Context, opts Options) (*store.Fingerprint, error) {
 	if err != nil {
 		return nil, fmt.Errorf("enroll: 读取 T=0 参考响应失败: %w", err)
 	}
+	// 派生列回填（设计 §2.2 一次性写入）：collector 落盘不写分类/归一化，
+	// 指纹构建（fingerprint.Build 仅 valid 入指纹）需要它们——回填后再
+	// Screen/Build，避免全部样本因空分类被跳过（M2.7 e2e 发现）。
+	taskFC := taskResolver(opts.Battery)
+	for _, r := range append(append([]*store.Response{}, rs1...), rs0...) {
+		if r.Classification == "" || r.Normalized == "" {
+			if task, ok := taskFC(r.Cell); ok {
+				pc := preprocess.NormalizeClassify(r.RawCompletion, task)
+				r.Classification = string(pc.Classification)
+				r.Normalized = pc.Normalized
+			}
+		}
+	}
 	// 段级失败率（审查 R-H1）：T1/T0 分段独立判定——T0 段全败不被 T1 成功稀释
 	// （全局比率会掩盖单段不可用）。Screen 的全局 unreachable 不适用，自行判定。
 	ratio1, ratio0 := failRatio(failed1, len(r1)), failRatio(failed0, len(r0))
 	scr := detector.Screen(rs1, detector.ScreenOptions{
 		Settings:    s,
 		T0Responses: rs0,
-		TaskForCell: taskResolver(opts.Battery),
+		TaskForCell: taskFC,
 	})
 	switch {
 	case ratio1 >= s.UnreachableFailRatio || ratio0 >= s.UnreachableFailRatio:
@@ -173,8 +186,15 @@ func Enroll(ctx context.Context, opts Options) (*store.Fingerprint, error) {
 	if err != nil {
 		return nil, fmt.Errorf("enroll: 指纹构建失败: %w", err)
 	}
-	if len(fp.Cells) < s.KMinCells {
-		return nil, fmt.Errorf("enroll: 指纹有效 cell %d < k_min %d", len(fp.Cells), s.KMinCells)
+	// 有效 cell 计数（N≥MinValidSamples；Build 已跳过 N=0 空 cell，此处防御双保险）
+	validCells := 0
+	for _, cd := range fp.Cells {
+		if cd.N >= s.MinValidSamples {
+			validCells++
+		}
+	}
+	if validCells < s.KMinCells {
+		return nil, fmt.Errorf("enroll: 指纹有效 cell %d < k_min %d", validCells, s.KMinCells)
 	}
 
 	// 4. 入库（审查 R-M2：先 models 后指纹——models 失败时指纹未落盘，重跑可重入；
@@ -209,10 +229,10 @@ func failRatio(failed, succeeded int) float64 {
 }
 
 // refResponsesID 构造响应 JSONL 的幂等续采 id（ref-<model>-<version>[/-t0]）。
-// 复用 store.SanitizeID：与响应文件路径的规范化一致，消除双规则碰撞面
-// （审查 S-M1：此前 "/"→"_" 与 store "/"→"__" 不一致，导致 "a/b" 与 "a_b" 同 id）。
+// model 与 version 均过 store.SanitizeID（审查 L1：version 含 "-t0" 等后缀会与
+// 其他版本的 T0 段同文件污染——统一规范化消除碰撞）。
 func refResponsesID(modelID, version string) string {
-	return "ref-" + store.SanitizeID(modelID) + "-" + version
+	return "ref-" + store.SanitizeID(modelID) + "-" + store.SanitizeID(version)
 }
 
 // appendModel 合并模型登记（modelID 已存在则保留既有条目，防止覆盖元数据）。

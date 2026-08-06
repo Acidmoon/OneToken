@@ -165,6 +165,9 @@ func Build(modelID, version, refSource string, collectedAt time.Time, responses 
 		T0Cells:       map[string]store.CellDist{},
 	}
 	for cell, a := range cells {
+		if a.n == 0 {
+			continue // 空分布 cell（无有效样本）不入指纹：len(Cells) 语义=有效 cell 数
+		}
 		fp.Cells[cell] = store.CellDist{
 			Dist:      a.dist,
 			N:         a.n,
@@ -173,6 +176,9 @@ func Build(modelID, version, refSource string, collectedAt time.Time, responses 
 		}
 	}
 	for cell, a := range t0 {
+		if a.n == 0 {
+			continue
+		}
 		fp.T0Cells[cell] = store.CellDist{
 			Dist:      a.dist,
 			N:         a.n,

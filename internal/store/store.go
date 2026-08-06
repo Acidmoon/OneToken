@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // schemaVersion 是当前数据格式版本（所有 JSON 文件顶层字段）。
@@ -115,7 +116,8 @@ type Audit struct {
 	Verdict               string             `json:"verdict"`
 	CellsDetail           map[string]float64 `json:"cells_detail,omitempty"`
 	QCFlags               []string           `json:"qc_flags,omitempty"`
-	AuditedAt             string             `json:"audited_at"` // UTC Z
+	Provider              string             `json:"provider,omitempty"` // 上游路由（OpenRouter 透传，§9.2 解释不稳定）
+	AuditedAt             string             `json:"audited_at"`         // UTC Z
 }
 
 // ROCPoint 是 ROC 曲线上的一个点（FPR, TPR）。
@@ -235,8 +237,9 @@ func sanitize(id string) string {
 	var b strings.Builder
 	b.Grow(len(id))
 	for _, r := range id {
-		if r == '\x00' || strings.ContainsRune(`*?"<>|`, r) {
-			continue
+		if r == '\x00' || strings.ContainsRune(`*?"<>|`, r) || unicode.IsControl(r) {
+
+			continue // NUL、文件非法字符与控制字符（换行/ANSI 终端注入防护，审查 L5）
 		}
 		b.WriteRune(r)
 	}

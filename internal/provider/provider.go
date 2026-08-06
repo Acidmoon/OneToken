@@ -197,11 +197,14 @@ func BuildHTTPRequest(baseURL string, p Protocol, rp RequestParams, apiKey strin
 	}
 	for k, v := range extraHeaders {
 		// 受保护/认证头禁止被附加头覆盖（审查 S-M3/L5）：
-		// 认证头只走 api_key_env（config 已拒同名头，此处双保险防注入路径），
-		// Content-Type/Host 由请求语义决定，anthropic-version 由协议层固定。
+		// 认证头只走 api_key_env（config.IsSensitiveHeader 统一黑名单，含
+		// x-goog-api-key 等形态），Content-Type/Host 由请求语义决定，
+		// anthropic-version 由协议层固定。
 		switch strings.ToLower(k) {
-		case "authorization", "proxy-authorization", "x-api-key", "api-key",
-			"apikey", "cookie", "content-type", "host", "anthropic-version":
+		case "content-type", "host", "anthropic-version":
+			continue
+		}
+		if config.IsSensitiveHeader(k) {
 			continue
 		}
 		req.Header.Set(k, v)

@@ -20,6 +20,27 @@ import (
 // Protocols 是合法协议值。
 var Protocols = []string{"auto", "responses", "chat", "anthropic"}
 
+// sensitiveHeaders 是敏感头黑名单（认证/凭据形态；密钥只走 api_key_env）。
+// 统一入口：config.validateProvider（yaml）、CLI 直传 --headers、provider 请求
+// 构建（跳过名单）三处复用，防规则漂移（审查 M2）。
+var sensitiveHeaders = map[string]bool{
+	"authorization": true, "proxy-authorization": true, "x-api-key": true,
+	"cookie": true, "api-key": true, "apikey": true, "api_key": true,
+	"x-goog-api-key": true, "x-auth-token": true, "x-access-token": true,
+	"x-api-token": true, "token": true,
+}
+
+// IsSensitiveHeader 判定头名是否属敏感黑名单（大小写不敏感；含空白/非 ASCII
+// 的头名也拒绝——Go transport 本会报非法头名，提前拒绝避免滞后失败）。
+func IsSensitiveHeader(h string) bool {
+	for _, r := range h {
+		if r == ' ' || r == '\t' || r > 0x7f {
+			return true
+		}
+	}
+	return sensitiveHeaders[strings.ToLower(h)]
+}
+
 // Limits 是 per-provider 限流与并发预算（0 = 不限）。
 type Limits struct {
 	RPM            int `yaml:"rpm"`
@@ -159,11 +180,7 @@ func validateProvider(p *ProviderConfig) error {
 	// 黑名单覆盖常见认证形态（审查 S-M3）：Azure api-key、Google x-goog-api-key、
 	// 通用 x-auth-token/x-access-token 等；headers 仅用于非敏感附加头。
 	for h := range p.Headers {
-		lower := strings.ToLower(h)
-		switch lower {
-		case "authorization", "proxy-authorization", "x-api-key", "cookie",
-			"api-key", "apikey", "api_key", "x-goog-api-key", "x-auth-token",
-			"x-access-token", "x-api-token", "token":
+		if IsSensitiveHeader(h) {
 			return fmt.Errorf("headers 禁止含敏感头 %q（密钥必须走 api_key_env 环境变量）", h)
 		}
 	}

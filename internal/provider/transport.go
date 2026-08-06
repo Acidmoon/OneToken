@@ -210,6 +210,9 @@ func (c *Client) doOnce(ctx context.Context, proto Protocol, rp RequestParams) (
 		// 避免解析失败被当网络瞬态放大请求（审查 M2/L4）。
 		return nil, fmt.Errorf("%w: %v", ErrBadResponse, err)
 	}
+	// 上游路由透传（设计 §6.4 Provider 字段、§9.2 审计记录上游 provider 解释不稳定）：
+	// OpenRouter 等聚合器经响应头暴露实际路由的上游。
+	rec.Provider = upstreamProvider(resp.Header)
 	// 密钥回显检测（审查 S-H1）：恶意/顶替端点可能在 200 成功响应体里回显
 	// Authorization/x-api-key。若原样落库则密钥进入证据链文件（违§10.1 基线）。
 	// 拒收样本（不篡改 raw，证据链完整性优先）；错误消息不含密钥内容。
@@ -242,6 +245,17 @@ func (c *Client) redactBody(b []byte) string {
 }
 
 // ---- 小工具 ----
+
+// upstreamProvider 从响应头提取上游 provider 名（聚合器透传；未知返回空串）。
+// OpenRouter：X-Openrouter-Via（如 "deepseek"）；其他聚合器头后续扩展。
+func upstreamProvider(h http.Header) string {
+	for _, k := range []string{"X-Openrouter-Via", "X-Upstream", "X-LiteLLM-Model-Id"} {
+		if v := h.Get(k); v != "" {
+			return v
+		}
+	}
+	return ""
+}
 
 // truncate 截断字节到 n，并回退到完整 UTF-8 rune 边界（审查 L4：
 // 避免切断多字节字符产生非法 UTF-8 串）。
