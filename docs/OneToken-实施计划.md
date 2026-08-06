@@ -1,6 +1,6 @@
 # OneToken 实施计划（任务拆分与状态跟踪）
 
-> **角色**：本文件是**项目进度的唯一真相**。设计依据见 `docs/OneToken-工程设计方案.md`（当前 v0.8），验收标准以设计文档为准，本文件负责把设计拆成可执行任务并跟踪状态。
+> **角色**：本文件是**项目进度的唯一真相**。设计依据见 `docs/OneToken-工程设计方案.md`（当前 v0.10），验收标准以设计文档为准，本文件负责把设计拆成可执行任务并跟踪状态。
 > **更新规则**：**每次完成任何实质性工作后必须更新本文件**（勾选状态、填日期与备注、按 AGENTS.md §3.1/§3.2 追加 §7 决策日志与 §8 更新日志）；收到反馈或评审意见后，先更新相关文档（本文件与设计文档），再动手改代码。规则详见 `AGENTS.md`。
 
 ---
@@ -16,7 +16,7 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 |---|---|---|---|
 | **P0** | Go 项目脚手架、配置骨架 | §10、§14 | ✅ 完成（2026-08-05） |
 | **M1** | 存储层（JSON/JSONL）/ preprocess / JSD / 校准 + Zenodo 论文复现（**不可得时按 §9.1 兜底**） | §3.2、§3.3、§3.4、§4、§9.1 | ✅ 完成（2026-08-06） |
-| **M2** | 统一提供商调用层（三协议）+ 采集 + 探测 + 双通道参考 + 端到端审计 | §2、§5、§6、§7、§9.2 | ⬜ 待办 |
+| **M2** | 统一提供商调用层（三协议）+ 采集 + 探测 + 双通道参考 + 端到端审计 | §2、§5、§6、§7、§9.2 | 🔄 进行中（M2.1 完成 2026-08-06） |
 | **M3** | 替换模拟实验 + 主辅操作点 + 报告模块 | §3.4、§9.3 | ⬜ 待办 |
 | **M4** | 调度 + 告警 + 漂移管理 + CLI 完整 + 长期验收 | §9.4、§12、§15 | ⬜ 待办 |
 
@@ -58,7 +58,7 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 
 | 任务 | 子步骤 | 依赖 | 验收 | 状态 |
 |---|---|---|---|---|
-| **M2.1** provider 协议层 | ① 三协议适配：`/v1/responses`（`reasoning:{effort:"minimal"}`、输出过滤 `type=="message"`/`output_text`、`output_tokens_details.reasoning_tokens`）、`/v1/chat/completions`（顶层 `reasoning_effort`、`max_completion_tokens`、`completion_tokens_details`）、`/v1/messages`（`thinking:{type:"disabled"}`、`x-api-key`+`anthropic-version`、`retry-after-ms`）；② base_url 拼接 `/v1/<endpoint>`（防双 `/v1`）；③ auto 协商四步（显式优先→域名初判→能力探测：200 锁定/401-403 不降级/404-405 换协议/**400 中止**）；④ `ResponseRecord` 统一结构（含 FinishReason、ReasoningTokens） | P0.3 | **URL 构造单测**（base_url 形态矩阵）；三协议请求/响应映射单测（mock 服务器） | ⬜ |
+| **M2.1** provider 协议层 | ① 三协议适配：`/v1/responses`（`reasoning:{effort:"minimal"}`、输出过滤 `type=="message"`/`output_text`、`output_tokens_details.reasoning_tokens`）、`/v1/chat/completions`（顶层 `reasoning_effort`、**`max_tokens`（设计 §3.1 采集参数 16 token 为准；新模型 `max_completion_tokens` 映射留 M2.4 能力探测按模型切换）**、`completion_tokens_details`）、`/v1/messages`（`thinking:{type:"disabled"}`、`x-api-key`+`anthropic-version`）；② base_url 拼接 `/v1/<endpoint>`（防双 `/v1`）；③ auto 协商四步（显式优先→域名初判→能力探测：200 锁定/401-403 不降级/404-405 换协议/**400 中止**）；④ `ResponseRecord` 统一结构（含 FinishReason、ReasoningTokens） | P0.3 | **URL 构造单测**（base_url 形态矩阵）；三协议请求/响应映射单测（mock 服务器） | ✅ 2026-08-06：`internal/provider` 包（Client/Protocol/RequestParams/ResponseRecord/BuildHTTPRequest/ParseResponse/Negotiate + config.SetAPIKey）：URL 形态矩阵 12 例（尾斜杠/含 /v1/本地/子路径//v10 不误伤/query 拒绝）；三协议请求体断言（responses input+instructions+reasoning嵌套、chat 顶层 reasoning_effort+system message、anthropic 顶层 system+thinking disabled）；响应解析（reasoning item 过滤/output_text 提取/三段 usage 归一/cached_tokens 三协议透传）；协商 mock（httptest：200 锁定/404 换协议/401·403 不降级/400 中止/5xx·429 中止/三失败 undetermined/域名初判）；**21 测试全绿**；**审查后修复**：禁重定向（CheckRedirect，x-api-key 防外泄）、base_url 全路径校验（userinfo/query/fragment 拒绝，含 CLI 直传路径）、cached_tokens 补全（chat prompt_tokens_details）、5xx/429 协商中止、localhost 空密钥豁免（vLLM）、超时接线 cfg.Limits.TimeoutSec、probe 响应限量读 |
 | **M2.2** provider 传输层 | ① 重试矩阵：429 Retry-After（秒/毫秒）、4xx 不重试、5xx 指数退避+jitter、最大重试与总 deadline；② 限流预算：per-provider RPM/RPD、并发 4–8（配置可覆盖）；③ 成本护栏：响应字节上限、completion 长度上限、单审计预算、超限中止记 `inconclusive`；④ SSRF：禁用重定向（`CheckRedirect` 返回 `ErrUseLastResponse`）、scheme 校验、内网/IPv6 私有段拦截、**DialContext 解析→校验→拨号**（DNS rebinding）；⑤ 日志脱敏（Authorization 永不落日志） | M2.1 | 单测：重试矩阵、限流计数、护栏触发、SSRF 拦截表 | ⬜ |
 | **M2.3** collector 并发采集 | ① worker pool（并发上限可配置）；② 幂等键（`sample_idx` + 部分唯一索引去重）；③ 可恢复续采（持久化电池进度）；④ 种子打乱 cell 顺序（速率限制亏空均匀扩散）；⑤ 进度输出 stderr / 结果 stdout（JSON） | M1.1、M2.1、M2.2 | 单测：崩溃续采不重复入库（模拟中断）；进度/结果流分离 | ⬜ |
 | **M2.4** detector 测量有效性 | ① 推理痕迹：`reasoning_tokens > 0`（responses/chat 均显式）与 `finish_reason=="length"` 为确定性证据；退化启发式：completion token 数 1–6 正常 / 40–60 异常、可见推理轨迹；统一标记 `hidden-reasoning`；**o 系 gate：实测接受 effort 最低档且 `reasoning_tokens=0` 才可指纹化，否则按论文排除**；② T=0 一致性：探针 **n≥5**、二项检验换算阈值、分 provider 判定 → `temperature-not-honored`；③ 响应级缓存签名：T=1.0 方差崩溃 + 低延迟联合筛查（**命中=嫌疑**，论文 14/2040 均良性，需本地校准）→ `response-caching`；④ 有效率：cell 级 ≥10 有效样本门槛（论文 Eq.1）、`valid<80%` 仅模型级 QC、**refusal 率突变 → `safety-layer-change`**；⑤ **重试统计持续失败 → `unreachable`**；⑥ 有效 cell < k_min → `inconclusive`；⑦ 被标记测量**不进指纹** | M1.1、M1.2、M2.3 | 探测器 flag 单测：**与设计 §5 的 5 类 flag（hidden-reasoning / temperature-not-honored / response-caching / safety-layer-change / unreachable）逐项**各自触发/不触发场景 | ⬜ |
@@ -160,6 +160,8 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 | 2026-08-06 | **M1.5 完成**：数据集下载完成（续传守护方案：`-C -` 续传 + HTML 错误页检测 + systemd 用户服务；Zenodo 支持 Range、Cloudflare 间歇限流）；md5 `f2ce3fba3081f73e9908179fb2f061b6` 与声明一致；解压安全（无穿越/symlink）；**黄金值验证：AUC 0.971342 / EER 0.07282 / 1-NN 59.5% 全部命中设计声称**；数据+代码归档 `data/zenodo/`（gitignore 排除）；M1.6 对拍黄金值 = 数据集 `results/` 产物（verification.json/split-scores.json/divergence.json 等）；设计文档同步 v0.9（pin 结果 + 前置门完成标注）；三视角审查修复：family 字段实为 family_guess（0/342 无 family，R 侧 `setNames` 崩溃隐患→M1.6 用 Go 侧 LOO）、根目录 SSH 脚本清理（防凭据泄露）、服务器主机名泛化、精确化项（toFixed 三处/中文数词 0-99/refusal /i/post_reasoning 阈值） | 助手 |
 | 2026-08-06 | **M1.6 完成**：`cmd/replay` 重放 harness（Go，复用 fingerprint/calibrate，L1 分布→L2 JSD→L3 ROC→L4 cell 级→L5 模型对级→L6 1-NN→L7 归一化层→**L8 同模型跨 provider**，八层对拍）全部命中论文黄金值（见任务行）；**0.227 复现**：审查发现数据集同一 slug 多 provider 记录（75/165 included 模型多 provider，gpt-4o=OpenAI+Azure、llama-3.3-70b 达 11 provider），L8 按 (model,provider) 拆指纹得 56 对同模型跨 provider 距离中位 **0.2230**（±5% 命中 0.227）；**preprocess 词表对齐论文**：硬币 canonical h/t（原 heads/tails）、颜色词表替换为论文 22 canonical（106 键 + 31 扩展 = 137），inClosedSpace 同步，单测更新；L7 归一化层量化：硬币 0.02→0.98、颜色 canonical 0.31→0.92；剩余 8 任务一致率 0.96–0.99；**颜色任务口径差异记录**：论文 normalized=原词/canonical 放 color_canon，我们 normalized=canonical（跨语言合并设计增强），M2 自用时以我们口径校准；**审查后修复**：jsd() 键排序（确定性）、pair 均值去 round4（EER 0.0729 逐位对齐）、L1 报告口径、sc.Err 防御、L6 最近邻范围、gofmt、注释过期 | 助手 |
 | 2026-08-06 | **M1.7 验收通过（M1 完成）**：98 单测全绿 + 八层回归全命中；§9.1 验收 11 通过 + 1 移交（URL 单测→M2.1）+ 1 不适用（数据兜底）；`docs/OneToken-M1-验收报告.md`；已知差异（refusal 超集/中文数词/颜色口径）记录在案 | 助手 |
+| 2026-08-06 | **M2.1 完成**：`internal/provider` 协议层（见任务行）；config 补 SetAPIKey（运行时密钥注入入口）；设计 §2.1 的 Provider 接口（含重试/限流）为 M2.2 最终形态，本步实现协议层中间件 Client；三视角审查修复（禁重定向/base_url 全路径校验/cached 透传/5xx 中止/本地空密钥豁免） | 助手 |
+| 2026-08-06 | **设计 §2.1 接口边界确认（M2.1）**：Provider interface（Complete 含重试/限流/护栏）归 M2.2；M2.1 交付协议层 Client（URL/请求/解析/协商）+ ResponseRecord；Retry-After 解析归 M2.2 ①；SSRF IP 拦截/DNS rebinding 归 M2.2 ④；响应字节上限归 M2.2 ③ | M2.1 审查 |
 
 ---
 

@@ -53,6 +53,9 @@ func (p ProviderConfig) GoString() string { return p.String() }
 // APIKey 返回注入的密钥值。
 func (p *ProviderConfig) APIKey() string { return p.apiKey }
 
+// SetAPIKey 运行时注入密钥（M2 统一调用层用；值不参与序列化）。
+func (p *ProviderConfig) SetAPIKey(k string) { p.apiKey = k }
+
 // redact 将密钥脱敏为前 4 位 + 星号。
 func redact(key string) string {
 	if key == "" {
