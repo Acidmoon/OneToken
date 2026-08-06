@@ -171,8 +171,10 @@ func Screen(responses []*store.Response, opts ScreenOptions) *Result {
 		res.ValidRateLow = res.ValidRate < opts.Settings.ValidRateQC // 模型级 QC（设计 §5）
 	}
 
-	// temperature-not-honored：T=0 探针确定性占比（设计 §5：n≥T0ProbeN 二项口径）
-	res.T0Judged, res.T0DetRatio, res.Flags.TemperatureNotHonored = checkT0Determinism(opts)
+	// temperature-not-honored：T=0 探针确定性占比（设计 §5：n≥T0ProbeN 二项口径）。
+	// T0NotJudged：有探针但样本/判定 cell 不足——调用方（enroll/audit）应感知，
+	// 不静默失效（审查 R-H2）。
+	res.T0Judged, res.T0DetRatio, res.Flags.TemperatureNotHonored, res.T0NotJudged = checkT0Determinism(opts)
 
 	// safety-layer-change：refusal 率突变（无基线/无分类数据则跳过）
 	if opts.RefusalBaseline != nil && res.RefusalRate >= 0 {
@@ -232,17 +234,17 @@ func isCachingSuspicious(cs CellStats, s config.Settings) bool {
 // ratio=确定性占比（judged==0 为 -1）；flagged=占比 < T0DeterministicRatio。
 // 判定门槛：judged ≥ T0MinJudgedCells（防单 cell 误判）；样本不足的 cell 跳过；
 // 全部不足时置 T0NotJudged（调用方可感知，不静默失效，审查 S-M5）。
-func checkT0Determinism(opts ScreenOptions) (int, float64, bool) {
+func checkT0Determinism(opts ScreenOptions) (judged int, ratio float64, flagged bool, notJudged bool) {
 	s := opts.Settings
 	if len(opts.T0Responses) == 0 || s.T0ProbeN <= 0 || s.T0MinJudgedCells <= 0 {
-		return 0, -1, false
+		return 0, -1, false, false // 无探针/配置禁用：不算未判定
 	}
 	// 配置兜底（审查 R-M4）：ratio 非法（<=0 或 >1）视为禁用（不恒触发/不静默禁用）
 	if s.T0DeterministicRatio <= 0 || s.T0DeterministicRatio > 1 {
-		return 0, -1, false
+		return 0, -1, false, false
 	}
 	byCell := groupByCell(opts.T0Responses)
-	det, judged := 0, 0
+	det := 0
 	for _, cell := range sortedCells(byCell) {
 		rs := byCell[cell]
 		if len(rs) < s.T0ProbeN {
@@ -254,13 +256,13 @@ func checkT0Determinism(opts ScreenOptions) (int, float64, bool) {
 		}
 	}
 	if judged == 0 {
-		return 0, -1, false
+		return 0, -1, false, true // 有探针但样本全不足：未判定（T0NotJudged）
 	}
-	ratio := float64(det) / float64(judged)
+	ratio = float64(det) / float64(judged)
 	if judged < s.T0MinJudgedCells {
-		return judged, ratio, false // 判定不足：不触发（T0NotJudged 由调用方经 T0Judged 感知）
+		return judged, ratio, false, true // 判定 cell 数不足：未判定
 	}
-	return judged, ratio, ratio < s.T0DeterministicRatio
+	return judged, ratio, ratio < s.T0DeterministicRatio, false
 }
 
 // t0Deterministic 判定同一 cell 的 T=0 响应是否一致（T=0 应确定性）。

@@ -49,7 +49,8 @@ type Model struct {
 	Vendor          string `json:"vendor,omitempty"`
 	Family          string `json:"family,omitempty"`
 	ModelType       string `json:"model_type,omitempty"` // open-source | proprietary
-	RefSource       string `json:"ref_source,omitempty"` // local | official-api | none
+	RefSource       string `json:"ref_source,omitempty"` // official-api | none（单通道，v0.15）
+	Provider        string `json:"provider,omitempty"`   // 参考来源 provider（同 provider 比对优先，§7.2）
 	CatalogSnapshot string `json:"catalog_snapshot,omitempty"`
 	Notes           string `json:"notes,omitempty"`
 }
@@ -69,7 +70,8 @@ type Fingerprint struct {
 	Version       string              `json:"version"`      // e.g. 2026-07-11v1
 	CollectedAt   string              `json:"collected_at"` // UTC Z
 	RefSource     string              `json:"ref_source"`
-	Cells         map[string]CellDist `json:"cells"` // "task:lang" -> 分布
+	Provider      string              `json:"provider,omitempty"` // 参考来源 provider（§7.2 同 provider 比对优先）
+	Cells         map[string]CellDist `json:"cells"`              // "task:lang" -> 分布
 	T0Cells       map[string]CellDist `json:"t0_cells,omitempty"`
 	QCFlags       []string            `json:"qc_flags,omitempty"`
 	SupersededBy  string              `json:"superseded_by,omitempty"`
@@ -219,6 +221,12 @@ func (s *Store) responsesPath(id string) string {
 // 约定：调用方应使用规范小写 id（macOS/Windows 文件系统大小写不敏感，
 // 大小写不同但其余相同的 id 会互相覆盖）；含 '/'、'\\'、':' 与 '_' 混合
 // 形态的 id 可能碰撞（如 "a:b" 与 "a_b"），规范命名下风险低，不做碰撞检测。
+// SanitizeID 将任意 id 规整为跨平台安全文件名（路径穿越与 Windows 非法名防护）。
+// 导出供 enroll 构造幂等续采 id 复用同一规范化（消除双规则碰撞面）。
+func SanitizeID(id string) string {
+	return sanitize(id)
+}
+
 func sanitize(id string) string {
 	id = strings.ReplaceAll(id, "/", "__")
 	id = strings.ReplaceAll(id, "\\", "__")

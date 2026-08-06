@@ -2,7 +2,7 @@
 
 > **依据论文**：《One Token Is Enough: Fingerprinting and Verifying Large Language Models from Single-Token Output Distributions》（arXiv:2607.10252，Tomáš Bruckner）
 >
-> **文档状态**：v0.15（参考通道单通道化：用户决策 2026-08-06——不做本地部署参考，只走云端 API；§7 重写、R5 风险关闭）
+> **文档状态**：v0.16（并入 M2.6 enroll 实现：版本化建档编排、信任边界声明、交叉校验能力限制）
 > **决策记录**：
 > - 实现语言：**Go**（IO 密集场景，启动毫秒级、单二进制、goroutine 并发天然适配批量采集；开发/迭代快）——用户拍板。
 > - **统一提供商调用层为系统核心**：任意 BaseURL + API Key 即可请求，三种协议适配（OpenAI Responses / OpenAI chat completions 兼容 / Anthropic messages），参考注册（enroll）与待审核模型（audit）共用此层——用户评审意见 1。
@@ -422,7 +422,8 @@ type ReferenceSource interface {
 
 - **能力层单通道**：仅 OfficialAPI；参考指纹一律来源云端，避免"参考通道与审计通道行为不一致"的系统性偏差（enroll/audit 同构走同一管线，设计原则 2）；
 - **每模型默认单源**：按 §7.3 决策表选一个 provider 建档（避免成本翻倍）；
-- **可选交叉校验（云端生态内）**：同一模型可同时在多个 provider 建档（如 OpenAI + Azure、OpenRouter 多上游，M1.6 数据集已证实现实存在），跨 provider 距离（中位 0.2230，M1.6 实测）作为**服务栈差异基线**，用于解释跨 provider 审计结果，不进默认判定路径（设计原则 1：统计行为不"通用"）。
+- **信任边界（M2.6 明确）**：enroll 的参考源端点若被顶替（中间人/恶意聚合器返回另一真实模型的正常分布），测量有效性门**无法检出**（门只测测量条件，不测身份）——污染指纹将静默失效后续全部审计。属信任模型边界：参考源身份可信度由用户对 provider 的选择与绑定校验（§6.4）保证；指纹记录来源 provider 与采集时间（fingerprint.Provider/CollectedAt），支持事后溯源与同 provider 比对优先（§7.2）；
+- **交叉校验（云端生态内，能力限制）**：同一模型多 provider 建档目前受存储单文件布局限制（同 modelID 指纹互相覆盖）——需用不同 modelID（含 provider 后缀）建档，或等 M4.2 per-version 文件布局；跨 provider 距离（中位 0.2230，M1.6 实测）作为**服务栈差异基线**，用于解释跨 provider 审计结果，不进默认判定路径（设计原则 1：统计行为不"通用"）。
 
 ---
 

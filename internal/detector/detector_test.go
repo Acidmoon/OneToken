@@ -560,3 +560,52 @@ func TestResponseCachingLatencyJoint(t *testing.T) {
 
 // fl 构造 *float64（safety-layer-change 基线指针测试用）。
 func fl(v float64) *float64 { return &v }
+
+// ---- 审查回归：T0NotJudged 感知（不静默失效） ----
+
+func TestT0NotJudgedFlagged(t *testing.T) {
+	s := testSettings()
+	// 有探针但每 cell 样本 < T0ProbeN → T0NotJudged=true（可感知）
+	var t0 []*store.Response
+	for c := 0; c < 3; c++ {
+		for i := 0; i < 3; i++ { // 3 < T0ProbeN=5
+			t0 = append(t0, resp(fmt.Sprintf("p%d", c), i, "x", store.ClassValid))
+		}
+	}
+	res := Screen(nil, ScreenOptions{Settings: s, T0Responses: t0})
+	if !res.T0NotJudged {
+		t.Fatal("探针样本不足应置 T0NotJudged")
+	}
+	if res.T0Judged != 0 {
+		t.Fatalf("T0Judged=%d，期望 0", res.T0Judged)
+	}
+}
+
+func TestT0NotJudgedWhenFewCells(t *testing.T) {
+	s := testSettings() // T0MinJudgedCells=3
+	// 样本足够但 judged=2 < 3 → T0NotJudged=true
+	var t0 []*store.Response
+	for c := 0; c < 2; c++ {
+		for i := 0; i < s.T0ProbeN; i++ {
+			t0 = append(t0, resp(fmt.Sprintf("p%d", c), i, fmt.Sprintf("d%d", c), store.ClassValid))
+		}
+	}
+	res := Screen(nil, ScreenOptions{Settings: s, T0Responses: t0})
+	if !res.T0NotJudged {
+		t.Fatal("judged < T0MinJudgedCells 应置 T0NotJudged")
+	}
+}
+
+func TestT0NotJudgedFalseWhenSufficient(t *testing.T) {
+	s := testSettings()
+	var t0 []*store.Response
+	for c := 0; c < 5; c++ {
+		for i := 0; i < s.T0ProbeN; i++ {
+			t0 = append(t0, resp(fmt.Sprintf("p%d", c), i, fmt.Sprintf("d%d", c), store.ClassValid))
+		}
+	}
+	res := Screen(nil, ScreenOptions{Settings: s, T0Responses: t0})
+	if res.T0NotJudged {
+		t.Fatal("探针充分不应置 T0NotJudged")
+	}
+}
