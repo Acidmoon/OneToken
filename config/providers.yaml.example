@@ -18,6 +18,9 @@ providers:
       rpd: 5000           # 每日请求上限；0 = 不限
       max_concurrency: 8  # 并发上限（默认 4–8，本地通道可更高）
       timeout_s: 60
+    # ssrf_allow:        # SSRF 白名单（IP 或 CIDR，设计 §6.4）：放行访问内网/私有段
+    #   - 172.16.0.0/12   # 如 Docker 网络内自建模型服务
+    #   - 10.5.0.1
     # headers:            # 可选附加头
     #   HTTP-Referer: "https://example.com"
 

@@ -25,6 +25,13 @@ type Settings struct {
 	DriftBaseline float64 // 参考噪声底线（论文：0.140）
 	DriftWindow   int     // 趋势窗口（近 N 次）
 
+	// 传输层（M2.2，设计 §10.1）：重试矩阵与成本护栏
+	MaxRetries       int   // 单请求最大重试次数（不含首次；默认 3）
+	RetryBaseDelayMS int   // 指数退避基数（毫秒；默认 500，含 jitter 幅度）
+	RetryMaxDelayMS  int   // 退避上限（毫秒；默认 8000）
+	MaxResponseBytes int64 // 响应体字节上限（成本护栏①；默认 1 MiB）
+	CompletionSlack  int   // completion 长度护栏容差（成本护栏②；默认 16）
+
 	// 存储
 	// data 目录由 store.DefaultRoot 管理（ONETOKEN_DATA 覆盖，默认 ~/.onetoken/data/），
 	// 不在 Settings 中重复定义（v0.5 JSON 存储决议）。
@@ -51,6 +58,12 @@ func DefaultSettings() Settings {
 
 		DriftBaseline: 0.140,
 		DriftWindow:   5,
+
+		MaxRetries:       3,
+		RetryBaseDelayMS: 500,
+		RetryMaxDelayMS:  8000,
+		MaxResponseBytes: 1 << 20,
+		CompletionSlack:  16,
 	}
 }
 

@@ -196,6 +196,14 @@ func BuildHTTPRequest(baseURL string, p Protocol, rp RequestParams, apiKey strin
 		}
 	}
 	for k, v := range extraHeaders {
+		// 受保护/认证头禁止被附加头覆盖（审查 S-M3/L5）：
+		// 认证头只走 api_key_env（config 已拒同名头，此处双保险防注入路径），
+		// Content-Type/Host 由请求语义决定，anthropic-version 由协议层固定。
+		switch strings.ToLower(k) {
+		case "authorization", "proxy-authorization", "x-api-key", "api-key",
+			"apikey", "cookie", "content-type", "host", "anthropic-version":
+			continue
+		}
 		req.Header.Set(k, v)
 	}
 	return req, nil
@@ -314,42 +322,16 @@ func ParseResponse(p Protocol, raw string) (*ResponseRecord, error) {
 }
 
 // ---- Client ----
+//
+// Client 结构与 NewClient/NewClientWithSettings 在 transport.go（M2.2 传输层）。
+// 本文件保留 Client 的只读视图方法（Protocol/Config/Endpoint）与协商入口。
 
-// Client 是单个端点的调用客户端（协议已解析/协商，M2.1 不含传输重试）。
-type Client struct {
-	cfg      config.ProviderConfig
-	protocol Protocol
-	http     *http.Client
+// Protocol 返回当前协议（协商后为锁定值）。并发安全（审查 H1）。
+func (c *Client) Protocol() Protocol {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.protocol
 }
-
-// NewClient 创建端点客户端。协议为 auto 时初始化为 Auto，由 Negotiate 解析。
-// 安全基线（审查 F1）：默认 client 禁用重定向（CheckRedirect → ErrUseLastResponse）——
-// Go 跨主机重定向只剥离 Authorization 不剥离 x-api-key，anthropic 密钥会随重定向外泄。
-func NewClient(cfg config.ProviderConfig, httpClient *http.Client) (*Client, error) {
-	p, err := ParseProtocol(cfg.Protocol)
-	if err != nil {
-		return nil, err
-	}
-	if err := validateBaseURL(cfg.BaseURL); err != nil {
-		return nil, err
-	}
-	if httpClient == nil {
-		timeout := 60 * time.Second
-		if cfg.Limits.TimeoutSec > 0 {
-			timeout = time.Duration(cfg.Limits.TimeoutSec) * time.Second
-		}
-		httpClient = &http.Client{
-			Timeout: timeout,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				return http.ErrUseLastResponse // 禁用重定向（§10/§6.4 安全基线）
-			},
-		}
-	}
-	return &Client{cfg: cfg, protocol: p, http: httpClient}, nil
-}
-
-// Protocol 返回当前协议（协商后为锁定值）。
-func (c *Client) Protocol() Protocol { return c.protocol }
 
 // Config 返回端点配置（脱敏后的只读视图由调用方自行处理）。
 func (c *Client) Config() config.ProviderConfig { return c.cfg }

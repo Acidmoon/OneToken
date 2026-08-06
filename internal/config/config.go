@@ -36,6 +36,7 @@ type ProviderConfig struct {
 	Protocol  string            `yaml:"protocol"`    // auto|responses|chat|anthropic
 	Limits    Limits            `yaml:"limits"`
 	Headers   map[string]string `yaml:"headers,omitempty"`
+	SSRFAllow []string          `yaml:"ssrf_allow,omitempty"` // SSRF 白名单（IP/CIDR）；空=拦截全部内网段（环回除外）
 
 	apiKey string // 运行时注入；不导出、不参与序列化
 }
@@ -154,11 +155,15 @@ func validateProvider(p *ProviderConfig) error {
 	if !ok {
 		return fmt.Errorf("protocol=%q，期望 %v", p.Protocol, Protocols)
 	}
-	// Headers 禁止敏感头名：防止绕过 api_key_env 约定，密钥明文落入配置文件
+	// Headers 禁止敏感头名：防止绕过 api_key_env 约定，密钥明文落入配置文件。
+	// 黑名单覆盖常见认证形态（审查 S-M3）：Azure api-key、Google x-goog-api-key、
+	// 通用 x-auth-token/x-access-token 等；headers 仅用于非敏感附加头。
 	for h := range p.Headers {
 		lower := strings.ToLower(h)
-		if lower == "authorization" || lower == "proxy-authorization" ||
-			lower == "x-api-key" || lower == "cookie" {
+		switch lower {
+		case "authorization", "proxy-authorization", "x-api-key", "cookie",
+			"api-key", "apikey", "api_key", "x-goog-api-key", "x-auth-token",
+			"x-access-token", "x-api-token", "token":
 			return fmt.Errorf("headers 禁止含敏感头 %q（密钥必须走 api_key_env 环境变量）", h)
 		}
 	}

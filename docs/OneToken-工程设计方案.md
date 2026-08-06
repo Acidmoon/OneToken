@@ -2,7 +2,7 @@
 
 > **依据论文**：《One Token Is Enough: Fingerprinting and Verifying Large Language Models from Single-Token Output Distributions》（arXiv:2607.10252，Tomáš Bruckner）
 >
-> **文档状态**：v0.10（并入 M1.6 重放结果与 0.227 事实澄清、preprocess 颜色/硬币词表对齐论文）
+> **文档状态**：v0.11（并入 M2.2 传输层实现：重试矩阵/限流/成本护栏/SSRF 落地与已知局限、Provider 接口契约确认）
 > **决策记录**：
 > - 实现语言：**Go**（IO 密集场景，启动毫秒级、单二进制、goroutine 并发天然适配批量采集；开发/迭代快）——用户拍板。
 > - **统一提供商调用层为系统核心**：任意 BaseURL + API Key 即可请求，三种协议适配（OpenAI Responses / OpenAI chat completions 兼容 / Anthropic messages），参考注册（enroll）与待审核模型（audit）共用此层——用户评审意见 1。
@@ -366,7 +366,9 @@ type ResponseRecord struct {
 }
 ```
 
-**安全性（语言无关，Go 实现时强制）**：禁用重定向（`http.Client{CheckRedirect: 返回 http.ErrUseLastResponse}`，显式配置，§10）；scheme 校验（https，localhost 例外）；**SSRF 拦截范围**：RFC1918（10/8、172.16/12、192.168/16）、环回 127/8、链路本地 169.254/16、CGNAT 100.64/10、IPv6 ::1 与 fc00::/7，可配置白名单；**DNS rebinding 防护**：DialContext 中对解析出的每个 IP 先校验再拨号（解析→校验→连接），仅校验配置字符串可被解析侧绕过；base_url 与密钥绑定校验（防止把 A 厂商密钥误配到恶意 base_url）；日志/异常脱敏（Authorization 头永不落日志）。
+**安全性（语言无关，Go 实现时强制）**：禁用重定向（`http.Client{CheckRedirect: 返回 http.ErrUseLastResponse}`，显式配置，§10）；scheme 校验（https，localhost 例外）；**SSRF 拦截范围**：RFC1918（10/8、172.16/12、192.168/16）、环回 127/8、链路本地 169.254/16、CGNAT 100.64/10、IPv6 ::1 与 fc00::/7、多播/未指定/受限广播与保留段（实现补全，§10.1），可配置白名单 `ssrf_allow`；**DNS rebinding 防护**：DialContext 中对解析出的每个 IP 先校验再拨号（解析→校验→连接，用解析后的 IP 拨号消除 TOCTOU）；base_url 与密钥绑定校验（防止把 A 厂商密钥误配到恶意 base_url）；日志/异常脱敏（Authorization 头永不落日志；**错误消息对响应体执行密钥回显擦洗**，M2.2 审查 H1）。
+
+**SSRF 已知局限（M2.2 实现确认）**：① 环回地址（127/8、::1）恒放行且无法配置禁用——本地部署通道（vLLM/Ollama）为设计认可的合法场景，与 scheme 校验的 localhost 例外一致；② 系统代理（HTTP_PROXY/HTTPS_PROXY，默认保留 `ProxyFromEnvironment`）下目标主机由代理转发，不经过 DialContext 校验——代理为用户显式信任实体；若代理本身位于内网，需将其地址加入 `ssrf_allow`；③ 重试退避中的单请求超时（`http.Client.Timeout`）判终止不重试（保守策略，防慢端点重复计费），慢端点恢复由审计级重试处理。
 
 ---
 
@@ -511,8 +513,8 @@ onetoken drift --model qwen/qwen3-8b
 1. **密钥管理**：`api_key_env` 环境变量引用，**永不落盘/落日志/落报告**；配置错误（A 厂商密钥配到 B base_url）→ 启动时绑定校验失败告警；
 2. **输出安全**：`html/template` 默认转义所有模型输出与 JSON 字段（存储型 XSS 防护）；raw 内容默认折叠展示；CSV/JSON 导出与 HTML 分开；
 3. **成本护栏（运行期强制）**：响应字节上限、completion 长度上限（>阈值即标记 hidden-reasoning 并中止该 cell）、单次审计总 token/总成本预算，超预算立即中止并记 `inconclusive`；
-4. **限流与滥用防护**：per-provider RPM/RPD 预算、并发上限 4–8（默认，配置可覆盖）、429 尊重 Retry-After（含 Anthropic 毫秒变体）、指数退避 + jitter、**突发铺开**（与普通流量交错，呼应 T2 缓解与论文"速率限制亏空均匀扩散"策略）；4xx 校验错误不重试、5xx 指数退避、最大重试次数与单次审计总 deadline；
-5. **SSRF 防护**：禁用重定向（`CheckRedirect` 显式返回 `ErrUseLastResponse`）、scheme 校验（https，localhost 例外）、内网/链路本地地址拦截（RFC1918/环回/链路本地/CGNAT/IPv6 私有段，可配置白名单）、DNS rebinding 防护（DialContext 解析→校验→拨号）。
+4. **限流与滥用防护**：per-provider RPM/RPD 预算、并发上限 4–8（默认，配置可覆盖）、429 尊重 Retry-After（含 Anthropic 毫秒变体）、指数退避 + jitter（整体封顶）、**突发铺开**（与普通流量交错，呼应 T2 缓解与论文"速率限制亏空均匀扩散"策略）；4xx 校验错误不重试、5xx 指数退避、最大重试次数与单次审计总 deadline（ctx 控制）；**超时口径（M2.2 确认）**：单请求超时（`http.Client.Timeout`）与调用方 ctx deadline 同判终止不重试（保守，防慢端点重复计费），慢端点恢复由审计级重试处理；**确定性错误不重试（M2.2 审查修复）**：3xx 重定向（已禁用跟随）、200 但解析失败（WAF 页等）均不进入重试矩阵；
+5. **SSRF 防护**：禁用重定向（`CheckRedirect` 显式返回 `ErrUseLastResponse`）、scheme 校验（https，localhost 例外）、内网/链路本地地址拦截（RFC1918/环回/链路本地/CGNAT/IPv6 私有段，可配置白名单；实现补全多播 224/4·ff00::/8、未指定、受限广播 255.255.255.255、Class E 240/4、fec0::/10、192.0.0.0/24、192.88.99.0/24、198.18.0.0/15）、DNS rebinding 防护（DialContext 解析→校验→拨号）。已知局限：系统代理（HTTP_PROXY 等）下目标由代理转发不经过 DialContext 校验（代理为显式信任实体，见 §6.4）；环回恒放行不可配置禁用（本地通道合法）。
 
 ---
 

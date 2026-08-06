@@ -67,6 +67,42 @@ func TestLoadExample(t *testing.T) {
 	if s.T0ProbeN < 5 {
 		t.Fatalf("T0 探针样本数应 ≥5: %d", s.T0ProbeN)
 	}
+	// 传输层默认设置断言（M2.2，设计 §10.1）
+	if s.MaxRetries != 3 || s.RetryBaseDelayMS != 500 || s.RetryMaxDelayMS != 8000 {
+		t.Fatalf("重试矩阵默认错误: %+v", s)
+	}
+	if s.MaxResponseBytes != 1<<20 {
+		t.Fatalf("响应体护栏默认错误: %d", s.MaxResponseBytes)
+	}
+	if s.CompletionSlack != 16 {
+		t.Fatalf("completion 护栏默认错误: %d", s.CompletionSlack)
+	}
+}
+
+// TestLoadSSRFAllow：ssrf_allow 白名单字段可解析（设计 §6.4）。
+func TestLoadSSRFAllow(t *testing.T) {
+	yamlDoc := `providers:
+  - name: local-docker
+    base_url: http://localhost:8000
+    api_key_env: LOCAL_API_KEY
+    protocol: chat
+    ssrf_allow:
+      - 172.16.0.0/12
+      - 10.5.0.1
+`
+	dir := t.TempDir()
+	p := filepath.Join(dir, "providers.yaml")
+	if err := os.WriteFile(p, []byte(yamlDoc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.Providers[0].SSRFAllow
+	if len(got) != 2 || got[0] != "172.16.0.0/12" || got[1] != "10.5.0.1" {
+		t.Fatalf("ssrf_allow 解析错误: %v", got)
+	}
 }
 
 // TestSecretNeverSerialized：密钥永不进入日志/报告/序列化（含 %#v）。
@@ -149,10 +185,20 @@ func TestValidateProviderRejectsBadProtocol(t *testing.T) {
 }
 
 func TestValidateProviderRejectsSensitiveHeader(t *testing.T) {
+	// 敏感头黑名单（审查 S-M3 扩充）：密钥只能走 api_key_env
+	for _, h := range []string{"Authorization", "x-api-key", "api-key", "apikey",
+		"x-goog-api-key", "x-auth-token", "x-access-token", "Cookie"} {
+		p := ProviderConfig{Name: "x", BaseURL: "https://api.example.com", APIKeyEnv: "X", Protocol: "chat",
+			Headers: map[string]string{h: "Bearer sk-inline"}}
+		if err := validateProvider(&p); err == nil {
+			t.Errorf("敏感头 %q 应被拒绝", h)
+		}
+	}
+	// 非敏感头应放行
 	p := ProviderConfig{Name: "x", BaseURL: "https://api.example.com", APIKeyEnv: "X", Protocol: "chat",
-		Headers: map[string]string{"Authorization": "Bearer sk-inline"}}
-	if err := validateProvider(&p); err == nil {
-		t.Fatal("敏感头应报错（防密钥明文落配置）")
+		Headers: map[string]string{"HTTP-Referer": "https://example.com"}}
+	if err := validateProvider(&p); err != nil {
+		t.Errorf("非敏感头应放行: %v", err)
 	}
 }
 

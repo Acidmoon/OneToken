@@ -23,9 +23,16 @@ var probeParams = RequestParams{
 //     200 锁定；401/403 密钥错误不降级；404/405 协议不匹配换下一候选；400 请求体问题中止；
 //  4. 连续三候选失败 → protocol-undetermined 告警错误。
 //
+// 协商失败即中止（不进 Complete 重试矩阵）：探测请求是元操作，瞬时 5xx/429
+// 由上层（collector）在审计级重试或下个会话重试（M2.1 验收语义，审查 R-M3）。
+// 每个探测请求计入 RPM/RPD 限流预算（避免协商风暴绕过预算）。
+//
 // model 参数：探测请求的模型名（由调用方提供，如试点模型）。空串时部分端点可能 400，
 // 该行为符合"400 中止"语义（探测参数错误不换协议）。
+// 并发安全：全程持 c.mu，仅 auto 且未协商时真正协商；其余调用等待锁定结果。
 func (c *Client) Negotiate(ctx context.Context, model string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.protocol != ProtocolAuto {
 		return nil // 显式锁定，不协商
 	}
@@ -37,9 +44,12 @@ func (c *Client) Negotiate(ctx context.Context, model string) error {
 
 	var lastErr error
 	for _, cand := range candidateProtocols(c.cfg.BaseURL) {
+		if err := c.rate.Wait(ctx); err != nil {
+			return err
+		}
 		status, err := c.probe(ctx, cand, probe)
 		if err != nil {
-			// 网络/传输错误：记录并尝试下一候选（探测阶段不区分 5xx，交给 M2.2 重试层）
+			// 网络/传输错误：记录并尝试下一候选
 			lastErr = fmt.Errorf("provider: 探测 %s 网络错误: %w", cand, err)
 			continue
 		}
@@ -58,8 +68,9 @@ func (c *Client) Negotiate(ctx context.Context, model string) error {
 			lastErr = fmt.Errorf("provider: %s 返回 %d（协议不匹配）", cand, status)
 			continue
 		case status >= 500 || status == http.StatusTooManyRequests:
-			// 5xx/429：端点存在但暂不可用/限流——不换协议（避免瞬时故障锁错协议），中止
-			return fmt.Errorf("%w: %s 返回 %d（端点暂不可用或限流，M2.2 重试层接管）", ErrUndetermined, cand, status)
+			// 5xx/429：端点存在但暂不可用/限流——不换协议（避免瞬时故障锁错协议），
+			// 协商中止，由上层审计级重试
+			return fmt.Errorf("%w: %s 返回 %d（端点暂不可用或限流）", ErrUndetermined, cand, status)
 		default:
 			lastErr = fmt.Errorf("provider: %s 返回未预期状态 %d", cand, status)
 			continue
