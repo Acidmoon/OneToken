@@ -2,7 +2,7 @@
 
 > **依据论文**：《One Token Is Enough: Fingerprinting and Verifying Large Language Models from Single-Token Output Distributions》（arXiv:2607.10252，Tomáš Bruckner）
 >
-> **文档状态**：v0.19（两套系统决策：用户 2026-08-06——保留论文原方法（非推理 direct 通道）+ 新增推理通道（post-reasoning 回答指纹，DeepSeek 实测可行性证实）；§1.2/§3.1/§5/§7/§9.2 同步）
+> **文档状态**：v0.20（推理通道稳定性实测：用户要求先验证再推进——同模型两次独立采集距离 0.1116 ≈ genuine 基线（探测几乎不变）、跨模型 0.238 可复现；τ 区间 0.15–0.18 与 k≥16 建议入 §3.4；§1.2/§7/§9.2 同步）
 > **决策记录**：
 > - 实现语言：**Go**（IO 密集场景，启动毫秒级、单二进制、goroutine 并发天然适配批量采集；开发/迭代快）——用户拍板。
 > - **统一提供商调用层为系统核心**：任意 BaseURL + API Key 即可请求，三种协议适配（OpenAI Responses / OpenAI chat completions 兼容 / Anthropic messages），参考注册（enroll）与待审核模型（audit）共用此层——用户评审意见 1。
@@ -38,7 +38,7 @@
 
 \* 论文同样排除强制隐藏推理端点；Responses API 的 `reasoning_tokens` 显式统计提供确定性证据，`reasoning.effort` 最低档（minimal/low）为**候选实验路径**——仅当实测目标模型接受最低档且 usage 显示 `reasoning_tokens=0` 时才可指纹化，否则按论文排除（o 系实测拒绝 "none"，该取值不作为任何协议的主取值）。
 
-> **两套系统决策（v0.19，用户裁决 2026-08-06）**：post-reasoning 通道由「未来扩展」升级为**系统 2（推理通道）**——保留论文原方法（系统 1：非推理端点直接采样指纹），新增推理端点适配：加大 `max_tokens` 使思考链 + 最终回答完整输出，以**思考后回答（post-reasoning content）分布**为指纹对象（`reasoning_tokens` 显式分离推理/回答 token）。**可行性已实测（DeepSeek v4-flash/pro）**：max_tokens=512 时 reasoning=35 + answer 完整、finish=stop；思考后回答分布呈模型特异性（flash 偏好 42、pro 偏好 73，8 次采样可区分）。两套系统共用同一管线（采集/归一化/指纹/JSD），仅**采集参数（max_tokens）与通道分档（reasoning）**不同。
+> **两套系统决策（v0.19，用户裁决 2026-08-06）**：post-reasoning 通道由「未来扩展」升级为**系统 2（推理通道）**——保留论文原方法（系统 1：非推理端点直接采样指纹），新增推理端点适配：加大 `max_tokens` 使思考链 + 最终回答完整输出，以**思考后回答（post-reasoning content）分布**为指纹对象（`reasoning_tokens` 显式分离推理/回答 token）。**可行性已实测（DeepSeek v4-flash/pro）**：max_tokens=512 时 reasoning=35 + answer 完整、finish=stop；思考后回答分布呈模型特异性（flash 偏好 42、pro 偏好 73，8 次采样可区分）。两套系统共用同一管线（采集/归一化/指纹/JSD），仅**采集参数（max_tokens）与通道分档（reasoning）**不同。**稳定性已实测（RQ1，2026-08-06，DeepSeek v4-flash 两次独立采集）**：同模型距离 0.1116 ≈ 分裂半噪声基线（0.09–0.10），跨模型 0.2376/0.2382（两次可复现）——**同模型探测结果几乎不变，跨模型 2 倍以上分离**（详见 §9.2 与冒烟记录 §7）。
 
 ### 1.3 核心设计原则（第一性原理）
 
@@ -179,6 +179,7 @@ Unicode NFC → 剥离标点/引号 → 大小写折叠 → 阿拉伯-印度/中
 - **impostor 试验**：模型 X 指纹 vs 模型 Y 指纹（Y≠X）→ 分布 D_impostor；
 - 输出：ROC 曲线、AUC、EER、τ_fpr1 / τ_fpr5、各自 TPR 与 bootstrap CI；
 - **分档维度**：(k_cells, n_per_cell, scope, ref_channel, target_channel) × (global / family / size-tier)；审计时精确匹配（Scope 为空串只命中空 Scope 档，防 global/family 同键误配），无匹配档时强制全电池校准或拒绝审计（实现选拒绝，`ErrNoCalibration`）；
+- **推理通道 τ 实测依据（v0.20，DeepSeek）**：genuine（同模型分裂半/独立采集）≈ 0.09–0.11，impostor（flash vs pro）≈ 0.24——**分离度约 2 倍**（窄于非推理 0.075/0.489 的 6.5 倍），推理通道 τ 建议 0.15–0.18 区间（M2.9 正式校准定值）；逐 cell 有噪声（同模型 7/40 cell >0.2），**推理通道审计建议 k=16 或全 cell**（k=8 抽样波动大，impostor 可漂至 0.15）；
 - **τ CI 缺口裁决（M2.5）**：校准未存 τ 自身 CI，inconclusive 缓冲采用**绝对缓冲** `TauInconclusiveBuffer`（默认 0.02；背景 genuine 中位 0.075 / 跨 provider 0.227，需按本地校准数据实测调整）——判定：s ≤ τ−buf → pass；s > τ+buf → suspicious；|s−τ| ≤ buf → inconclusive；
 - **k_min 双口径裁决（M2.5）**：门槛以 B′ 参与 cell 数 `cellsUsed`（fingerprint.Distance 返回值）为准（与 §2.1 一致）；detector 的 ValidCells（审计侧计数）仅作报告；**fail-closed：无共同可比较 cell（cellsUsed=0）判 inconclusive，不得判 pass**；校准档 τ 须有限且 ∈ [0,1]（读侧校验，防篡改/损坏静默改变结论）；
 - ROC/AUC/EER/UPGMA/ARI/1-NN **Go 自写**（各几十行），须单测：perfect/random 分类器 AUC=1/0.5 的构造性校验。
@@ -409,7 +410,7 @@ type ReferenceSource interface {
 ### 7.2 通道：云端 API（用户自定参考来源；工具不作规定）
 
 - **参考来源由用户自定**（用户裁决 2026-08-06 补正）：enroll 的参考端点**不作规定**——用户可选用厂商官方 API（OpenAI / Anthropic / 智谱 / DeepSeek / 阿里 dashscope 等）或任何信任的云端端点（含 OpenRouter 等聚合器）；一律经统一调用层（§6），协议按厂商自动/显式协商。工具只保证管线中立（enroll/audit 同构），**不推荐、不禁止**特定参考 provider；
-- **通道分档（v0.19 两套系统）**：通道维度扩展为 `direct`（非推理，论文原方法）与 `reasoning`（推理端点，post-reasoning 回答指纹）——两通道指纹对象相同（回答分布）、采集参数与校准基线不同，**分别校准 τ、同通道比对**（推理通道 genuine/impostor 距离基线独立测定）；
+- **通道分档（v0.19 两套系统；v0.20 稳定性实测）**：通道维度扩展为 `direct`（非推理，论文原方法）与 `reasoning`（推理端点，post-reasoning 回答指纹）——两通道指纹对象相同（回答分布）、采集参数与校准基线不同，**分别校准 τ、同通道比对**；推理通道实测：同模型 0.1116 ≈ genuine 基线 0.09–0.10、跨模型 0.238（2 倍分离）——**判定可用但灵敏度低于 direct 通道**（τ 区间与 k 建议见 §3.4）；
 - **风险提示（用户自行权衡）**：聚合器（OpenRouter 等）多上游路由可能使参考分布不稳定（R4，跨 provider 中位 0.227）——若选聚合器作参考，建议结合同 provider 比对与校准后 τ；参考指纹**标注来源 provider**（enroll 的 ProviderName 字段），验证优先同 provider 比对；
 - **约束**：**无可用云端 API 的模型（本地私有权重 / 无任何可及云端端点）无法建立参考指纹**（→ §3.5 降级为端点间互比）；闭源模型（GPT/Claude 系列）只能经其官方 API；
 - **成本**：每模型指纹采集按论文普查量级 ≈ $0.21/模型平均（1320 查询 ≈ $0.14）；前沿定价模型**工程外推** $1–5（非论文数据，待实测修正，R8）；
@@ -490,7 +491,7 @@ onetoken drift --model qwen/qwen3-8b
 
 - 试点：云端 API 建档 **Qwen3-8B** 等（≥2 个开源模型；**参考端点由用户自定**——示例用厂商官方 API，用户可另选信任端点）；**统一调用层三协议各跑通一次 enroll**（openai-responses / anthropic / 其他 chat 端点），验证协议协商与 ResponseRecord 收敛；
 - 对 OpenRouter 同名端点 audit，**验收标准为"判定与跨通道校准后 τ 一致"，如实报告实际距离**——不预设"必须 pass"：论文实测 29% 同模型跨 provider 对超出 impostor 区间、OpenRouter 多上游路由可能造成审计不稳定，健康端点也可能 fail（生态事实而非实现 bug）；审计响应记录上游 provider 字段用于解释不稳定；
-- **推理通道试点（v0.19 实测，DeepSeek）**：deepseek-v4-flash/pro 均为推理模型（reasoning_tokens 占满 16 预算、finish=length）——系统 1 直接排除；系统 2 以 max_tokens=512 重采拿到 post-reasoning 回答（flash 偏好 42、pro 偏好 73，8 次采样分布可区分）——**推理通道指纹化可行性已证实**，判别力需 n=30 级校准测定（M2.9）；
+- **推理通道试点（v0.19/v0.20 实测，DeepSeek）**：deepseek-v4-flash/pro 均为推理模型（reasoning_tokens 占满 16 预算、finish=length）——系统 1 直接排除；系统 2 以 max_tokens=512 重采拿到 post-reasoning 回答（flash 偏好 42、pro 偏好 73）——**可行性已证实**；**稳定性实测（v0.20）**：flash 两次独立采集（40 cell × 30）距离 0.1116 ≈ 分裂半基线 0.09–0.10（同模型几乎不变）、flash vs pro 0.2376/0.2382 可复现（2 倍分离）——推理通道判定可用，τ 单独校准（0.15–0.18，M2.9）；另发现管线关键修复：归一化输入必须为提取的回答文本（Text）而非 RawCompletion（含响应唯一 id 会污染分布键）；
 - 用**不同模型**端点冒充 → 期望 suspicious（impostor）；
 - 验收：探测器 flag 正确性断言（reasoning_tokens、T=0 探针、缓存签名、有效率、hidden-reasoning）。
 
