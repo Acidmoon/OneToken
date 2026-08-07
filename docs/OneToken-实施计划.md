@@ -1,6 +1,6 @@
 # OneToken 实施计划（任务拆分与状态跟踪）
 
-> **角色**：本文件是**项目进度的唯一真相**。设计依据见 `docs/OneToken-工程设计方案.md`（当前 v0.10），验收标准以设计文档为准，本文件负责把设计拆成可执行任务并跟踪状态。
+> **角色**：本文件是**项目进度的唯一真相**。设计依据见 `docs/OneToken-工程设计方案.md`（当前 v0.21），验收标准以设计文档为准，本文件负责把设计拆成可执行任务并跟踪状态。
 > **更新规则**：**每次完成任何实质性工作后必须更新本文件**（勾选状态、填日期与备注、按 AGENTS.md §3.1/§3.2 追加 §7 决策日志与 §8 更新日志）；收到反馈或评审意见后，先更新相关文档（本文件与设计文档），再动手改代码。规则详见 `AGENTS.md`。
 
 ---
@@ -16,7 +16,7 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 |---|---|---|---|
 | **P0** | Go 项目脚手架、配置骨架 | §10、§14 | ✅ 完成（2026-08-05） |
 | **M1** | 存储层（JSON/JSONL）/ preprocess / JSD / 校准 + Zenodo 论文复现（**不可得时按 §9.1 兜底**） | §3.2、§3.3、§3.4、§4、§9.1 | ✅ 完成（2026-08-06） |
-| **M2** | 统一提供商调用层（三协议）+ 采集 + 探测 + 云端 API 参考 + 端到端审计 | §2、§5、§6、§7、§9.2 | 🔄 进行中（M2.1–M2.7 完成 2026-08-06；M2.8 验收待真实试点） |
+| **M2** | 统一提供商调用层（三协议）+ 采集 + 探测 + 云端 API 参考 + 端到端审计 | §2、§5、§6、§7、§9.2 | 🔄 进行中（M2.1–M2.7 + M2.9 实现完成 2026-08-06；M2.8 验收待真实试点；M2.9 推理 τ 正式校准待办） |
 | **M3** | 替换模拟实验 + 主辅操作点 + 报告模块 | §3.4、§9.3 | ⬜ 待办 |
 | **M4** | 调度 + 告警 + 漂移管理 + CLI 完整 + 长期验收 | §9.4、§12、§15 | ⬜ 待办 |
 
@@ -45,7 +45,7 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 | **M1.1** 存储层（JSON/JSONL，§4） | ① §4.1 目录布局（models/fingerprints/audits/responses/calibrations/drift）；② 原子写（tmp+rename）+ 目录自动创建；③ 幂等：responses JSONL 追加 + 内存 map 去重（cell+sample_idx）；④ 证据链：raw_sha256 + append-only 约定；⑤ schema_version 校验（不匹配拒绝加载）；⑥ 路径可配置（默认 ~/.onetoken/data/，ONETOKEN_DATA 覆盖） | P0.2 | 单测：原子写（无半文件残留）、JSONL 追加/读回、幂等重跑去重索引、证据链哈希、schema_version 拒绝、导入导出往返 | ✅ 2026-08-05：`internal/store` 包实现：类型定义（Model/Fingerprint/Response/Audit/Calibration/DriftEntry）、原子写（tmp+fsync+rename）、JSONL 追加（O_APPEND）、幂等索引（ResponseKey cell+idx）、sanitize 路径穿越防护、schema_version 泛型校验、导入导出往返（拷贝目录即导出）；13 单测全绿 |
 | **M1.2** preprocess 归一化+分类 | ① §3.2 管线：NFC→标点剥离→大小写折叠→数字映射（阿拉伯-印度/中文）→首 token→颜色词表；② 分类 valid/invalid/refusal/empty（**无静默丢弃**）；③ 黄金样本单测（手工构造，非 Zenodo 抽取） | P0.2 | 边界测试全绿：阿拉伯-印度数字、中文数字、emoji、全角/半角、多 token 首 token 切分 | ✅ 2026-08-05：`internal/preprocess` 包：NFC（x/text/norm）→剥离标点/引号/符号（emoji）→小写→数字映射（阿印/波印/全角/中文数词解析至亿）；分类 valid/invalid(出空间或多词)/refusal(四语言核心词包含匹配)/empty；颜色/硬币跨语言词表→规范码；多词前置判定；工程约定（首 token 空格启发式、random_letter 放宽为单字母、负号剥离行为）注释在案；21 单测（含 40-cell 真实电池冒烟） |
 | **M1.3** fingerprint：分布 + 基 2 JSD | ① 经验分布估计（有效样本）；② JSD：`(KL(p‖m)+KL(q‖m))/(2·ln2)`、KL 自然对数、**0·ln0=0 无平滑**；③ cell 双方 ≥10 有效样本才入平均（论文 Eq.1）；④ T=0 变体 | M1.1、M1.2 | 合成向量单测（对称性、有界 [0,1]、不相交支持）；与 scipy `jensenshannon(p,q,base=2)` **平方后**对拍（注意 sqrt 差异） | ✅ 2026-08-05：`internal/fingerprint` 包：KL（0·ln0=0，发散 +Inf）、JSD（原始标度不取 sqrt）、Normalize、Build（按 cell×温度分组、仅 valid 入指纹、valid_rate）、Distance/CellJSDs（Eq.1，双方 ≥10 过滤、无共同 cell 返 (0,0)）、T0 变体（门槛 ≥1）；16 单测全绿，含 **scipy 1.18.0 jensenshannon(base=2)² 黄金值对拍**（8 组，容差 1e-12）+ 对称性/有界性/部分不相交 0.5 手算/过滤规则；累计 82 单测全绿。**审查后修复**（正确性/安全/需求三视角）：Build 非法温度（NaN/±Inf/负）与同 cell 混合正温度 → error（ErrTemperature）、超长 Normalized（>1KB）与空串 valid 防御性跳过、全零计数 dist 过滤（Normalize 后非空）、非有限 JSD 不进均值、退化输入语义文档化+测试快照；**设计 v0.6**（Distance 签名 `(float64,int)` 与 T0 门槛留痕 §2.1/§3.3） |
-| **M1.4** calibrate：ROC/AUC/EER/bootstrap | ① 分裂半 genuine / impostor 试验构造（重复奇偶切分）；② ROC/AUC/EER；③ bootstrap CI；④ (k,n,通道) 分档存储（§4 calibrations 表）；⑤ **LOO 1-NN**（自写，仅用于 M1.6 复现家族分类；设计 §2.1 标注 v1.2，此实现为复现所需，投产路径在 v1.2） | M1.1、M1.3 | 构造性单测：perfect 分类器 AUC=1、random AUC=0.5；CI 覆盖正确性抽查；1-NN 最近邻命中单测 | ✅ 2026-08-05：`internal/calibrate` 包：SplitHalves（奇偶切分）、computeROC（阈值扫描，含 (0,0)/(1,1) 端点）、AUC（曼-惠特尼 U，tie 0.5）、EER、ThresholdAtFPR（最宽松不超限）、BootstrapTPRCI（可复现种子）、Calibrate（填 store.Calibration）、LOO1NN；16 单测：构造性验收（perfect AUC=1、random AUC=0.5）、AUC 对称性、ROC 形状、EER、τ 语义（含 FPR 跳变）、bootstrap CI 覆盖+可复现、1-NN 双家族命中+无共同 cell 跳过+nil 安全、sklearn `roc_auc_score` 黄金值落库、Options 防御；累计 98 全绿。**审查后修复**（三视角）：LOO 无共同 cell 的 (0,0) 伪距离→跳过（High）、τ=−∞ 无法 JSON 序列化→Calibrate 返 nil 无效校准（High）、空输入 EER=0 假校准→nil、NaN/±Inf 得分过滤、Options NaN target 回落/NResamples 上限 1e5/Seed 默认非零、LOO nil 安全。**设计 v0.7**（§2.1 calibrate 签名、§3.4 τ_fpr 语义+τ CI 缺口 M2.5 裁决+对构造归属 M1.6）；**①④ 归属**：半指纹构建/配对/聚合与分档键填充在 M1.6 重放 harness 完成 |
+| **M1.4** calibrate：ROC/AUC/EER/bootstrap | ① 分裂半 genuine / impostor 试验构造（重复奇偶切分）；② ROC/AUC/EER；③ bootstrap CI；④ (k,n,通道) 分档存储（§4 calibrations 表）；⑤ **LOO 1-NN**（自写，仅用于 M1.6 复现家族分类；设计 §2.1 标注 v1.2，此实现为复现所需；**投产路径已移出 MVP**——v0.21，用户决策 2026-08-07，见 §3.5） | M1.1、M1.3 | 构造性单测：perfect 分类器 AUC=1、random AUC=0.5；CI 覆盖正确性抽查；1-NN 最近邻命中单测 | ✅ 2026-08-05：`internal/calibrate` 包：SplitHalves（奇偶切分）、computeROC（阈值扫描，含 (0,0)/(1,1) 端点）、AUC（曼-惠特尼 U，tie 0.5）、EER、ThresholdAtFPR（最宽松不超限）、BootstrapTPRCI（可复现种子）、Calibrate（填 store.Calibration）、LOO1NN；16 单测：构造性验收（perfect AUC=1、random AUC=0.5）、AUC 对称性、ROC 形状、EER、τ 语义（含 FPR 跳变）、bootstrap CI 覆盖+可复现、1-NN 双家族命中+无共同 cell 跳过+nil 安全、sklearn `roc_auc_score` 黄金值落库、Options 防御；累计 98 全绿。**审查后修复**（三视角）：LOO 无共同 cell 的 (0,0) 伪距离→跳过（High）、τ=−∞ 无法 JSON 序列化→Calibrate 返 nil 无效校准（High）、空输入 EER=0 假校准→nil、NaN/±Inf 得分过滤、Options NaN target 回落/NResamples 上限 1e5/Seed 默认非零、LOO nil 安全。**设计 v0.7**（§2.1 calibrate 签名、§3.4 τ_fpr 语义+τ CI 缺口 M2.5 裁决+对构造归属 M1.6）；**①④ 归属**：半指纹构建/配对/聚合与分档键填充在 M1.6 重放 harness 完成 |
 | **M1.5** 前置门：pin 论文实现语义 | ① 下载 Zenodo 数据集（doi:10.5281/zenodo.21278557）+ 软件归档（doi:10.5281/zenodo.21278793），记录校验和；② 核对论文实现：是否 scipy、base 参数、**是否取 sqrt**、是否平滑、cell 过滤规则；③ 输出《语义 pin 记录》写入本文件备注；**④ 数据不可得 → 空置**（用户决策 2026-08-05）：不阻塞后续，改由用户自备权威数据（官方账号/API 采集）替代；JSD 标度维持 M1.3 既定实现（基 2 原始、无平滑）并标注"语义未 pin"，验收口径见设计 §9.1 兜底条（② 用户已确认） | 外部数据 | 语义 pin 明确：常数标度（sqrt vs 原始）确定；数据不可得时按 ④ 空置（标度即"未 pin"） | ✅ 2026-08-06：**前置门完成**（详见 `docs/OneToken-M1.5-语义pin记录.md`）：软件归档 md5 `d81de3b8…`、数据集 md5 `f2ce3fba…` 均与 Zenodo 声明一致；JSD 基 2/原始标度（不 sqrt）/无平滑**与 M1.3 一致零改动**；R pROC 做 ROC/EER；采样参数与设计一致；黄金值验证 AUC 0.971342 / EER 0.07282 / 1-NN 59.5%；数据归档 `data/zenodo/`（gitignore） |
 | **M1.6** 数据重放与分层回归 | ① 重放归一化→分布→JSD 矩阵→ROC；② **cell 级中位数**：同模型分裂半 0.075、跨模型 0.489（6,564 genuine / 107 万 impostor cell 对），±5%；③ **模型对级 D 中位数**：跨 provider 0.227、噪声底线 0.140，±5%；④ 逐 cell 黄金样本对精确值校验；⑤ 全矩阵结构检查（genuine 整体 < impostor）；⑥ AUC 0.971 / EER 7.3% / 1-NN 家族分类 59.5%（±2pp）；ARI 低值（0.023）属正常；**⑦ 数据源兜底**（用户决策 2026-08-05）：Zenodo 不可得（M1.5 空置）时改用用户自备权威数据重放；论文数值项标注 N/A、验收降级为自备数据基线 + 结构检查 + 内部自洽（设计 §9.1 兜底条 ② 用户已确认） | M1.1–M1.4（M1.5 空置时豁免） | 见左列；回归脚本可复现（含数据版本哈希）；数据不可得时按 ⑦ 兜底 | ✅ 2026-08-06：**重放全部命中**（`cmd/replay`，数据=data/zenodo）：L1 分布 6572 cell 最大差 0；L2 JSD 536,649 对最大差 0.0001（toFixed 边界）；L4 cell 级 6,564 对/0.075、107 万对/0.489 精确；L5 噪声底线 0.140 精确、impostor 0.483（论文同口径 0.4832）；**L8 同模型跨 provider 56 对中位 0.2230，复现论文 0.227（±5%）**；L3 AUC 0.971318/EER 0.0729；L6 1-NN 59.509%；L7 归一化层 8 任务一致率 0.96–0.99、硬币词表对齐后 0.98、颜色 canonical 0.92；preprocess 颜色/硬币词表对齐论文（coin h/t、颜色 22 canonical） |
 | **M1.7** M1 验收评审 | 汇总全部单测 + 回归报告；逐条对照设计文档 §9.1 验收项 | M1.6 | 验收清单逐项勾选；**未过项列入下一迭代** | ✅ 2026-08-06：**验收通过（11 通过 + 1 移交 M2.1 + 1 不适用，无未过项）**（详见 `docs/OneToken-M1-验收报告.md`）：98 单测全绿；§9.1 逐项核对——校验和/前置门 pin/cell 级 0.075·0.489/模型对级 0.140·0.2230/AUC 0.971318·EER 0.0729·1-NN 59.509%/结构检查/内部自洽/构造性单测全部 ✅；无未过项；M2 隐含前置（URL 单测）移交 M2.1；已知差异（refusal 超集/中文数词/颜色口径/扩展键）记录在案 |
@@ -76,9 +76,9 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 
 | 任务 | 子步骤 | 依赖 | 验收 | 状态 |
 |---|---|---|---|---|
-| **M3.1** 假目标构造 | ① 本地可控：vLLM 加载 AWQ/GPTQ 量化权重、旧版 checkpoint（记录权重哈希）；② 公网：不同模型端点；③ 本地-公网结果**分开报告**（本地无服务栈噪声、结果偏乐观） | M2.7 | 假目标清单与构造脚本可复现 | ⬜ |
+| **M3.1** 假目标构造 | ① 公网：不同模型端点冒充（impostor）；~~② 本地可控：vLLM 加载 AWQ/GPTQ 量化权重、旧版 checkpoint~~ **已移出 MVP**（用户决策 2026-08-07：需 GPU 环境、投入产出比低；公网冒充已覆盖核心 T1 替换场景） | M2.7 | 假目标清单可复现 | ⬜ |
 | **M3.2** 主辅操作点评估 | ① 真/假目标各 **≥8**；② 每端点重复审计 **≥5 次**取判定序列，报告二项 CI；③ **主评估点 τ_fpr1**：TPR ≥ T（T 由 M1 校准数据预先确定并记录，预计 60–80%，如实报告 CI）；④ **辅评估点 τ_fpr5**：TPR ≥ 90%；⑤ 同端点重复审计 verdict 一致性 ≥ 80% | M3.1、M1.4 | 评估报告：两个操作点的 FPR/TPR 对 + CI；数值先定指标后定值 | ⬜ |
-| **M3.3** 报告模块 | ① 单端点报告（逐 cell JSD 明细、QC flags）；② 距离矩阵热力图；③ UPGMA 聚类图（**v1.1**，复刻论文 Fig.2）；④ HTML 输出经 `html/template` 默认转义（模型输出只进文本节点，SVG 结构内部常量生成） | M2.7 | 报告样例 + XSS 注入用例（恶意 raw 文本被转义） | ⬜ |
+| **M3.3** 报告模块 | ① 单端点报告（逐 cell JSD 明细、QC flags）；② 距离矩阵热力图；~~③ UPGMA 聚类图（v1.1，复刻论文 Fig.2）~~ **已移出 MVP**（用户决策 2026-08-07，搁置）；④ HTML 输出经 `html/template` 默认转义（模型输出只进文本节点，SVG 结构内部常量生成） | M2.7 | 报告样例 + XSS 注入用例（恶意 raw 文本被转义） | ⬜ |
 | **M3.4** M3 验收评审 | 逐条对照设计文档 §9.3 | M3.2、M3.3 | 验收清单逐项勾选 | ⬜ |
 
 **M3 完成标准**：主辅操作点评估完成 + 报告可用（设计文档 §14 M3 行）。
@@ -104,7 +104,7 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 
 | ID | 风险 | 缓解 | 状态 |
 |---|---|---|---|
-| R1 | 参考指纹硬约束：无官方 API/开源权重的模型只能互比线索 | §3.5 降级路径（v1.2） | 开放 |
+| R1 | 参考指纹硬约束：无官方 API/开源权重的模型只能互比线索 | §3.5 互比线索（**已移出 MVP**，用户决策 2026-08-07；MVP 内如实报告不可验证，恢复需单独设计） | 开放 |
 | R2 | 错误率本质：τ 小样本 CI 宽、误报优先→漏报 | bootstrap CI 如实报告；inconclusive 缓冲 + 重复审计 | 开放 |
 | R3 | 指纹漂移：模型更新导致验证窗口错位 | TTL 30 天 + 趋势监测（M4.2） | 开放 |
 | R4 | 跨通道分布差异（中位 0.227）+ OpenRouter 多上游路由 | 同通道比对优先 + 校准后 τ；记录上游 provider | 开放 |
@@ -135,6 +135,7 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 | 2026-08-05/06 | **设计 v0.9（M1.5 语义 pin）**：JSD 基 2/原始标度（不 sqrt）/无平滑与 M1.3 一致；R pROC 工具链；采样参数确认；pin 记录 docs/OneToken-M1.5-语义pin记录.md | M1.5 结果 |
 | 2026-08-06 | **设计 v0.10（M1.6 重放 + 词表对齐）**：八层对拍全命中（0.075/0.489/0.140/0.483/0.227-L8/0.971318/0.0729/59.5%）；preprocess 颜色/硬币词表对齐论文 canonical（coin h/t、颜色 22 码）；0.227 复现路径（同 slug 多 provider） | M1.6 结果 + 审查 |
 | 2026-08-06 | **M1.7 验收通过（M1 完成）**：98 单测 + 八层回归全命中；§9.1 验收 11 通过 + 1 移交（URL 单测→M2.1）+ 1 不适用（数据兜底）；docs/OneToken-M1-验收报告.md | M1.7 评审 |
+| 2026-08-07 | **落地优先方向（用户意见）**：工作须能落地、不重论文学术性、挑重点落实——① **验收口径不放水**：M3/M4 统计验收保持原口径（真/假目标各 ≥8、二项 CI、预定义 TPR、14 天×10 端点）；② **论文装饰性模块移出 MVP**：UPGMA 聚类图（原 v1.1）、谱系信号 LOO 1-NN 投产（原 v1.2，实现仅复现用途）、本地 vLLM 假目标（M3.1 本地分支）；③ **开发重心转向工程落地**：真实试点（M2.8，待用户密钥）→ 报告/漂移/调度/备份等实用功能；设计 v0.21 同步 | 用户意见 |
 
 ---
 
@@ -188,6 +189,8 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 | 2026-08-06 | **用户决策：参考通道单通道化（云端 API）**——不做本地部署模型参考（原 §7.2 LocalHost vLLM/Ollama 不采用），参考指纹只走云端 API（厂商官方/聚合器，经统一调用层）；设计 v0.15（§7 重写、§9.2/§14/§16 同步）、M2.6 任务行裁剪（删本地权重校验）、M2.7 试点改云端建档、风险 R5 关闭 | 用户意见 |
 | 2026-08-06 | **M2.5 完成（verify 判定）+ 设计 v0.14**：`VerifyAudit` 具化设计 §2.1（端到端 Verify 含采集归 M2.7）；**裁决（设计 §3.4 回写）**：τ CI 缺口 → 绝对缓冲 TauInconclusiveBuffer=0.02（需本地校准）；k_min 双口径 → 以 B′ cellsUsed 为准 + fail-closed（cellsUsed=0 判 inconclusive）；Scope 纳入分档键（空串只命中空档）；**三视角审查修复 9 项**：高——CellsUsed=0 假 pass（fail-open → 门控）、MatchCalibration 缺 Scope 顺序依赖（纳入匹配键）、τ 无合法性校验（有限且 ∈[0,1]）；中——k_min 口径裁决、回填写回调用方切片（副本回填+并发 -race 测试）、RawSHA256 读侧补全（证据链篡改检测）、inconclusive 逃逸（处置口径文档化，连续 N 次 fail-closed 归 M2.7）；低——Judge 边界注释修正、CellsDetail 输出（§4.3 audits 用）；ErrNoCalibration 短路遮蔽注记 | 三视角审查（正确性/安全/需求符合性） |
 | 2026-08-06 | **M2.4 完成（detector 测量有效性）+ 设计 v0.13**：`Screen(responses, ScreenOptions) *Result` 实现设计 §2.1（入参原始响应、出参 5 类 Flags+统计，cleaned 由调用方据 Flags 过滤）；**口径留痕**（设计 §5 末段）：截断信号跨协议（length/max_tokens/max_output_tokens）、退化启发式可达性受护栏约束（护栏归因 M2.5）、T=0 实现为自洽性（参考比对降级，主距离兜底）、偏好任务/closed 空间缓存豁免、延迟联合默认禁用（可被端点欺骗）、unreachable 失败计数经 `collector.CountTaskFailures`、safety 基线指针化、o 系 gate 归属 M2.7 能力探测、k_min 双口径 M2.5 裁决；**三视角审查修复 12 项**：高——Anthropic max_tokens 截断漏报（匹配集合扩充）；中——偏好任务缓存误报（favorite 前缀豁免+closed 空间校准）、T0 ratio>1/NaN 兜底、judged 门槛（T0MinJudgedCells=3）、T0 归一化比较、RefusalBaseline 零值误用（改指针）、TaskForCell 未命中静默（Unknown 计数）、unreachable 失败统计生产者（CountTaskFailures 修复 joinError As 吞兄弟）、ValidRateQC 死配置接线（ValidRateLow）；低——7-39 灰区注释、CompletionTokens 含 reasoning token 口径注记 | 三视角审查（正确性/安全/需求符合性） |
+
+| 2026-08-07 | **落地优先方向（用户意见）+ 设计 v0.21**：验收口径保持统计严谨不放水（M3/M4 不变）；论文装饰性模块移出 MVP——UPGMA 聚类图（原 v1.1）、谱系信号 LOO 1-NN 投产（原 v1.2）、本地 vLLM 假目标（M3.1 本地分支）；设计文档同步 v0.21（头部决策记录/§1.2 范围声明/§2.1/§2.2/§3.4/§3.5/§6.1 示例注记/§7.2/§7.3/§8/§9.1/§9.3/§10/§14/末尾版本说明）；**三视角审查后修复**：§2.2/§7.2/§7.3 互比降级活跃引用补标注（原引 §3.5 已搁置）、R1 缓解列更新、M1.4 投产路径补注、§9.1 ARI 口径注记、§6.1 本地参考示例残留清理；下一步：真实试点（M2.8，待用户密钥）优先，密钥到位前可推进报告/漂移等不依赖真实端点的落地功能 | 助手 |
 
 ---
 

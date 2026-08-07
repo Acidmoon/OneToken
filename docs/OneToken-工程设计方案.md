@@ -2,7 +2,7 @@
 
 > **依据论文**：《One Token Is Enough: Fingerprinting and Verifying Large Language Models from Single-Token Output Distributions》（arXiv:2607.10252，Tomáš Bruckner）
 >
-> **文档状态**：v0.20（推理通道稳定性实测：用户要求先验证再推进——同模型两次独立采集距离 0.1116 ≈ genuine 基线（探测几乎不变）、跨模型 0.238 可复现；τ 区间 0.15–0.18 与 k≥16 建议入 §3.4；§1.2/§7/§9.2 同步）
+> **文档状态**：v0.21（**落地优先方向，用户决策 2026-08-07**：工作须能落地、不重论文学术性、挑重点落实——① **验收口径不放水**：M3/M4 统计验收保持原口径（真/假目标各 ≥8、二项 CI、预定义 TPR、14 天×10 端点长期验收），检测能力必须经得起验证；② **论文装饰性模块移出 MVP**：UPGMA 聚类图（论文 Fig.2 复刻，原 v1.1）、谱系信号 LOO 1-NN 投产（原 v1.2）、本地 vLLM 假目标（M3.1 本地分支）；③ **开发重心转向工程落地**：真实试点（M2.8）优先，随后报告/漂移/调度/备份等实用功能；v0.20 推理通道稳定性实测内容保留于 §1.2/§3.4/§7.2/§9.2）
 > **决策记录**：
 > - 实现语言：**Go**（IO 密集场景，启动毫秒级、单二进制、goroutine 并发天然适配批量采集；开发/迭代快）——用户拍板。
 > - **统一提供商调用层为系统核心**：任意 BaseURL + API Key 即可请求，三种协议适配（OpenAI Responses / OpenAI chat completions 兼容 / Anthropic messages），参考注册（enroll）与待审核模型（audit）共用此层——用户评审意见 1。
@@ -10,6 +10,7 @@
 > - 参考指纹通道：**单通道——只走云端 API**（用户决策 2026-08-06；不做本地部署参考），厂商官方 / 聚合器 API 一律经统一调用层；参考指纹标注来源 provider 与模型版本（§7）。
 > - 首个试点目标：云端 API 建档（Qwen3-8B 等 ≥2 开源模型，**参考端点由用户自定**）→ 同名端点审计（§9.2）。
 > - 操作点：默认误报优先（τ 对应 FPR≈1%），附 τ_fpr5 辅评估点；阈值按 (k, n, 通道) 分档存储（§3.4、§4）。
+> - **落地优先方向（v0.21，用户意见 2026-08-07）**：工作须能落地、不重论文学术性、挑重点落实——验收口径**不放水**（M3/M4 统计验收保持）；论文装饰性模块**移出 MVP**：UPGMA 聚类图（原 v1.1，不复刻论文 Fig.2）、谱系信号 LOO 1-NN 投产（原 v1.2，1-NN 实现仅 M1.6 复现用途）、本地 vLLM 假目标（M3.1 本地分支）；开发重心：真实试点（M2.8）→ 报告/漂移/调度/备份等落地功能。
 > - **M1.5 前置门 pin 结果（v0.9）**：论文软件归档（Zenodo 21278793）核对完成——JSD 基 2、**原始标度（不取 sqrt）**、0·ln0=0 无平滑、cell 双方 ≥10 有效样本、R pROC 做 ROC/EER；与 Go 实现（M1.3/M1.4）完全一致，零改动；采样参数（T=1.0 n=30、T=0 n=3、前沿 n=15、max_tokens=16、四语言）与 §P0.3 一致；详见 `docs/OneToken-M1.5-语义pin记录.md`。
 
 ---
@@ -34,7 +35,7 @@
 | 参考指纹云端 API 获取（厂商官方 / 聚合器，统一调用层） | 多模型混合路由的逐请求溯源 |
 | 阈值校准（genuine/impostor、ROC/EER、bootstrap CI） | 强制隐藏推理模型（o-series 等）的直接指纹化* |
 | 测量有效性探测（温度、推理、缓存签名） | 端到端鉴权/权限体系（v2 讨论） |
-| 调度、告警、报告、指纹漂移管理 | — |
+| 调度、告警、报告、指纹漂移管理 | 谱系互比降级（LOO 1-NN 家族分类，原 v1.2）——**已移出 MVP**（用户决策 2026-08-07，§3.5） |
 
 \* 论文同样排除强制隐藏推理端点；Responses API 的 `reasoning_tokens` 显式统计提供确定性证据，`reasoning.effort` 最低档（minimal/low）为**候选实验路径**——仅当实测目标模型接受最低档且 usage 显示 `reasoning_tokens=0` 时才可指纹化，否则按论文排除（o 系实测拒绝 "none"，该取值不作为任何协议的主取值）。
 
@@ -99,8 +100,8 @@
 | `internal/detector` | 测量有效性探测与清洗（依赖 preprocess 分类结果），与 verify 解耦 | `Screen(responses []*store.Response, ScreenOptions) *Result`（M2.4 具化：设计 `Screen(processed)→{ok,flags,cleaned}` 的入参为原始响应（分类可预填或经 TaskForCell 现算），出参 Result 含 5 类 Flags + per-cell 统计 + ValidCells/KMinCells（inconclusive 信号）；cleaned 语义由调用方据 Flags 过滤实现；ScreenOptions：Settings/T0Responses/RefusalBaseline(nil=无)/FailedTasks/TotalTasks/TaskForCell） |
 | `internal/fingerprint` | 分布估计、**基 2 JSD（自写，直接按论文 Eq.1）**、指纹对象（构建自 `store.Fingerprint`） | `Distance(a, b *Fingerprint) (float64, int)`——返回 (距离, 参与 cell 数)，参与数供上层按有效 cell < k_min 判 inconclusive；`Build(responses) (*Fingerprint, error)` |
 | `internal/verify` | 判定：JSD vs τ（按 (k,n,scope,通道) 匹配校准库），含 inconclusive 缓冲 | `VerifyAudit(responses []*store.Response, claimed *store.Fingerprint, Options) (*Result, error)`（M2.5 具化：设计 §2.1 的 `Verify(ctx, target Provider, claimed, k, n)` 为端到端含采集，由 M2.7 CLI 组装；本包交付 `Judge`/`MatchCalibration`/`VerifyAudit`——证据链哈希校验、副本回填、τ 合法性、fail-closed 无共同 cell 判 inconclusive） |
-| `internal/calibrate` | genuine/impostor 试验（分裂半奇偶切分原语）、ROC/AUC/EER、bootstrap CI、(k,n,通道) 分档（M1 范围）；LOO 1-NN 已实现（复现用途，投产路径 v1.2）；UPGMA/ARI（报告，v1.1）为后续里程碑 | `Calibrate(genuine, impostor []float64, opts) → *store.Calibration`（分档键 Scope/K/NPerCell/通道 与 CalibratedAt 由调用方填充；空输入或非有限阈值返回 nil 无效校准）；`SplitHalves` / `LOO1NN` |
-| `internal/reporter` | 距离矩阵、聚类图（v1.1）、单端点报告、告警；**Go `html/template` 默认转义防 XSS** | `Report(auditID) → md/html` |
+| `internal/calibrate` | genuine/impostor 试验（分裂半奇偶切分原语）、ROC/AUC/EER、bootstrap CI、(k,n,通道) 分档（M1 范围）；LOO 1-NN 已实现（仅 M1.6 复现用途，投产已移出 MVP——用户决策 2026-08-07）；UPGMA/ARI 已移出 MVP（搁置，不复刻论文 Fig.2） | `Calibrate(genuine, impostor []float64, opts) → *store.Calibration`（分档键 Scope/K/NPerCell/通道 与 CalibratedAt 由调用方填充；空输入或非有限阈值返回 nil 无效校准）；`SplitHalves` / `LOO1NN` |
+| `internal/reporter` | 距离矩阵热力图、单端点报告（逐 cell JSD 明细 + QC flags）、告警；**Go `html/template` 默认转义防 XSS**；聚类图已移出 MVP（用户决策 2026-08-07） | `Report(auditID) → md/html` |
 | `internal/store` | JSON/JSONL 文件存储：目录布局（§4.1）、原子写（tmp+rename）、JSONL 追加、幂等去重索引、证据链（append-only + raw_sha256）、schema_version 校验 | SaveAudit / AppendResponse / LoadResponses / SaveFingerprint / ... |
 | `internal/config` | 配置加载（YAML/环境变量），密钥用不可序列化类型；**所有阈值/规则集中配置** | `Load(path) → Config` |
 | `cmd/onetoken` | CLI 入口（cobra）：enroll/audit/calibrate/probe/report/drift | `main.go` |
@@ -108,7 +109,7 @@
 ### 2.2 数据流（一次完整审计）
 
 ```
-前置条件：claimed_model 已 enroll（models 表 + 参考指纹）。无参考指纹的模型走 §3.5 互比降级。
+前置条件：claimed_model 已 enroll（models 表 + 参考指纹）。**MVP 内无参考指纹的模型无法验证**（原 §3.5 互比降级已移出 MVP，2026-08-07）。
 
 enroll 阶段（低频，如每周）：
   参考源 ProviderConfig → provider/（协议协商+请求） → collector/（并发电池调度）
@@ -182,11 +183,11 @@ Unicode NFC → 剥离标点/引号 → 大小写折叠 → 阿拉伯-印度/中
 - **推理通道 τ 实测依据（v0.20，DeepSeek）**：genuine（同模型分裂半/独立采集）≈ 0.09–0.11，impostor（flash vs pro）≈ 0.24——**分离度约 2 倍**（窄于非推理 0.075/0.489 的 6.5 倍），推理通道 τ 建议 0.15–0.18 区间（M2.9 正式校准定值）；逐 cell 有噪声（同模型 7/40 cell >0.2），**推理通道审计建议 k=16 或全 cell**（k=8 抽样波动大，impostor 可漂至 0.15）；
 - **τ CI 缺口裁决（M2.5）**：校准未存 τ 自身 CI，inconclusive 缓冲采用**绝对缓冲** `TauInconclusiveBuffer`（默认 0.02；背景 genuine 中位 0.075 / 跨 provider 0.227，需按本地校准数据实测调整）——判定：s ≤ τ−buf → pass；s > τ+buf → suspicious；|s−τ| ≤ buf → inconclusive；
 - **k_min 双口径裁决（M2.5）**：门槛以 B′ 参与 cell 数 `cellsUsed`（fingerprint.Distance 返回值）为准（与 §2.1 一致）；detector 的 ValidCells（审计侧计数）仅作报告；**fail-closed：无共同可比较 cell（cellsUsed=0）判 inconclusive，不得判 pass**；校准档 τ 须有限且 ∈ [0,1]（读侧校验，防篡改/损坏静默改变结论）；
-- ROC/AUC/EER/UPGMA/ARI/1-NN **Go 自写**（各几十行），须单测：perfect/random 分类器 AUC=1/0.5 的构造性校验。
+- ROC/AUC/EER/1-NN（复现用途）**Go 自写**（各几十行），须单测：perfect/random 分类器 AUC=1/0.5 的构造性校验；**UPGMA/ARI 已移出 MVP**（用户决策 2026-08-07，不复刻论文 Fig.2）。
 
-### 3.5 谱系辅助信号（标注 v1.2，可选）
+### 3.5 谱系辅助信号（**已移出 MVP**，用户决策 2026-08-07）
 
-对无法建立参考指纹的模型（无第一方 API、无开源权重），退化为**端点间互比**：与已建档模型做最近邻（LOO 1-NN）分类，输出"最接近的已知模型家族"——如论文中 `palmyra-x5` 落入 Qwen 邻域的先例。此模式产出**线索**而非判定。
+对无法建立参考指纹的模型（无第一方 API、无开源权重），原设计退化为**端点间互比**：与已建档模型做最近邻（LOO 1-NN）分类，输出"最接近的已知模型家族"（论文中 `palmyra-x5` 落入 Qwen 邻域的先例）。此模式产出**线索**而非判定，对单端点真伪判定无实际用途——**投产路径已移出 MVP 主线，标注搁置**；LOO 1-NN 实现保留（仅 M1.6 复现用途，`internal/calibrate.LOO1NN`），若日后恢复则单独设计。
 
 ---
 
@@ -332,7 +333,7 @@ providers:
     headers:                             # 附加头（如 OpenRouter 的 X-Title）
       HTTP-Referer: "https://example.com"
   - name: local-qwen
-    base_url: http://localhost:8000        # 本地参考通道（vLLM）
+    base_url: http://localhost:8000        # 示例：本地服务可作被审计端点直传（参考通道已单通道化为云端 API，2026-08-06）
     api_key_env: LOCAL_API_KEY
     protocol: chat
     limits: { rpm: 0, rpd: 0, max_concurrency: 16, timeout_s: 120 }   # 本地不限流；并发可高于默认 4–8
@@ -412,7 +413,7 @@ type ReferenceSource interface {
 - **参考来源由用户自定**（用户裁决 2026-08-06 补正）：enroll 的参考端点**不作规定**——用户可选用厂商官方 API（OpenAI / Anthropic / 智谱 / DeepSeek / 阿里 dashscope 等）或任何信任的云端端点（含 OpenRouter 等聚合器）；一律经统一调用层（§6），协议按厂商自动/显式协商。工具只保证管线中立（enroll/audit 同构），**不推荐、不禁止**特定参考 provider；
 - **通道分档（v0.19 两套系统；v0.20 稳定性实测）**：通道维度扩展为 `direct`（非推理，论文原方法）与 `reasoning`（推理端点，post-reasoning 回答指纹）——两通道指纹对象相同（回答分布）、采集参数与校准基线不同，**分别校准 τ、同通道比对**；推理通道实测：同模型 0.1116 ≈ genuine 基线 0.09–0.10、跨模型 0.238（2 倍分离）——**判定可用但灵敏度低于 direct 通道**（τ 区间与 k 建议见 §3.4）；
 - **风险提示（用户自行权衡）**：聚合器（OpenRouter 等）多上游路由可能使参考分布不稳定（R4，跨 provider 中位 0.227）——若选聚合器作参考，建议结合同 provider 比对与校准后 τ；参考指纹**标注来源 provider**（enroll 的 ProviderName 字段），验证优先同 provider 比对；
-- **约束**：**无可用云端 API 的模型（本地私有权重 / 无任何可及云端端点）无法建立参考指纹**（→ §3.5 降级为端点间互比）；闭源模型（GPT/Claude 系列）只能经其官方 API；
+- **约束**：**无可用云端 API 的模型（本地私有权重 / 无任何可及云端端点）无法建立参考指纹**（原 §3.5 互比降级已移出 MVP，2026-08-07——MVP 内此类模型如实报告不可验证）；闭源模型（GPT/Claude 系列）只能经其官方 API；
 - **成本**：每模型指纹采集按论文普查量级 ≈ $0.21/模型平均（1320 查询 ≈ $0.14）；前沿定价模型**工程外推** $1–5（非论文数据，待实测修正，R8）；
 
 > **原 LocalHost 通道（v0.14 及以前）**：本地部署 vLLM/Ollama 建档（vLLM 优先、Ollama 受限需同权重形状校验、权重哈希记录）——用户决策不采用，保留本条仅为历史留痕。
@@ -422,7 +423,7 @@ type ReferenceSource interface {
 | 声称模型类型 | 参考指纹来源 | 备注 |
 |---|---|---|
 | 有可用云端 API（第一方或聚合器） | **用户自定**（enroll 的参考端点不作规定） | 经统一调用层；标注 provider 与模型版本；聚合器参考需用户自行权衡多上游路由风险 |
-| 无可用云端 API（本地私有 / 无端点可及） | 无 → 降级为端点间互比 | 只能给"最接近家族"线索（§3.5） |
+| 无可用云端 API（本地私有 / 无端点可及） | 无 → **MVP 内无法验证**（原 §3.5 互比降级已移出 MVP，2026-08-07） | 如实报告不可验证；恢复需单独设计 |
 
 ### 7.4 单通道语义（明确裁决）
 
@@ -452,7 +453,7 @@ onetoken audit --provider openrouter --claimed-model openai/gpt-5.1 \
 onetoken calibrate --scope global --recompute
 onetoken report --audit <id>        # 单端点报告（逐 cell JSD 明细）
 onetoken report --matrix            # 距离矩阵热力图
-onetoken report --tree              # UPGMA 聚类图（v1.1，复刻论文 Fig.2）
+# UPGMA 聚类图（原 v1.1，论文 Fig.2 复刻）——已移出 MVP（用户决策 2026-08-07）
 onetoken drift --model qwen/qwen3-8b
 
 # 任意端点直传（临时/一次性场景，无需先写 providers.yaml）：
@@ -482,7 +483,7 @@ onetoken drift --model qwen/qwen3-8b
 - 验收（**指标分层，按统计层次分别重放**）：
   - **距离值级回归（必须）**：两个层次分开——**cell 级中位数**：同模型分裂半 0.075、跨模型 0.489（6,564 genuine / 107 万 impostor cell 对）；**模型对级 D 中位数**：噪声底线 0.140、跨 provider 0.227——各 ±5% 容差；**M1.6 实测（v0.10 更正）**：0.075/0.489/0.140 精确命中；**0.227 由 L8 复现**（数据集同一 slug 多 provider 记录——75/165 included 模型有多 provider，如 gpt-4o=OpenAI+Azure、llama-3.3-70b 达 11 provider；按 (model,provider) 拆指纹，56 对同模型跨 provider 距离中位 **0.2230**，±5% 内命中；另实测全部 impostor 模型对中位 0.483）；另固定若干**逐 cell 黄金样本对**（来自 Zenodo 数据）做精确值校验；
   - 全矩阵结构检查：重放出的同模型 genuine 对距离整体 < impostor 对距离，中位数贴近上述常数；
-  - 论文级指标（单调不变量，不能单独作验收）：AUC ≈ 0.971、EER ≈ 7.3%、家族分类 ≈ 59.5%（±2pp）；**ARI 低值（论文 0.023）属正常**，勿当 bug 排查；
+  - 论文级指标（单调不变量，不能单独作验收）：AUC ≈ 0.971、EER ≈ 7.3%、家族分类 ≈ 59.5%（±2pp）；**ARI 低值（论文 0.023）属正常**，勿当 bug 排查（注：ARI 为 M1 论文复现指标检查项，功能模块已移出 MVP——用户决策 2026-08-07）；
   - 内部自洽兜底：同模型两半低 JSD、跨模型高 JSD；算法单测：ROC/AUC 用 perfect/random 构造性校验（AUC=1/0.5）、归一化黄金样本测试；
   - M2 隐含前置：三协议 **URL 构造单测**（base_url 拼 `/v1/<endpoint>`，防双 /v1）。
 - **数据不可得兜底（v0.8，保留备用；截至 2026-08-05/06 数据已获取、兜底未触发）**：① **用户决策（已确认）**：Zenodo 数据集/软件归档不可获取时，**M1.5 前置门空置**、不阻塞后续，改由用户自备权威数据（官方账号/API 采集真实响应）替代；② **验收口径（用户已确认 2026-08-05）**：上述论文数值项（cell 级 0.075/0.489、模型对级 0.227/0.140、AUC 0.971 / EER 7.3% / 家族分类 59.5% / ARI 0.023）标注 **N/A（数据不可得）**；验收**降级**为“自备数据回归基线记录 + 全矩阵结构检查（genuine < impostor）+ 内部自洽兜底”；JSD 常数标度维持 M1.3 既定实现（§3.3）并标注“语义未 pin”，校准记录与回归报告需带该标注；⚠️ **循环验证注意**：自备数据经同一管线采集处理，无法独立验证管线本身（系统性归一化 bug 会让结构检查照常通过）；Zenodo 数据若日后可得，需回 pin 复核标度并重跑 M1.6。
@@ -498,7 +499,7 @@ onetoken drift --model qwen/qwen3-8b
 ### 9.3 里程碑 M3：替换模拟实验
 
 - **样本量**：真/假目标各 ≥8（检出率 90% 时 3 个样本全中概率仅 0.729）；每端点重复审计 ≥5 次取判定序列，报告二项 CI；
-- **假目标构造（明确定义）**：(i) 本地可控——vLLM 加载 AWQ/GPTQ 量化权重、旧版 checkpoint；(ii) 公网——不同模型端点。本地-本地比对无服务栈噪声、结果偏乐观，**与公网结果分开报告**；
+- **假目标构造（明确定义）**：公网不同模型端点冒充（impostor）。~~本地可控——vLLM 加载 AWQ/GPTQ 量化权重、旧版 checkpoint~~ **已移出 MVP**（用户决策 2026-08-07：需 GPU 环境、投入产出比低，公网冒充已覆盖核心 T1 替换场景；如日后需要量化顶替/版本回退的本地深度验证，另行评估）。
 - **验收（先定指标后定数值，主辅双操作点）**：
   - 主评估点 τ_fpr1：TPR ≥ T（T 由 M1 校准数据预先确定并记录，预计 60–80% 区间，如实报告 CI）；
   - 辅评估点 τ_fpr5：TPR ≥ 90%；
@@ -521,7 +522,7 @@ onetoken drift --model qwen/qwen3-8b
 | CLI | `spf13/cobra` | 子命令体系（enroll/audit/…）；`--help` 毫秒级 |
 | 配置 | YAML + 环境变量（密钥） | 所有阈值/规则进配置，不硬编码；密钥类型禁止序列化进日志/报告 |
 | 日志 | 标准库 `log/slog`（结构化） | 脱敏：Authorization 头、密钥字段永不输出 |
-| 统计 | `gonum.org/v1/gonum`（stat）；ROC/AUC/EER/UPGMA/ARI/1-NN/bootstrap **自写** | 各几十行；须构造性单测（AUC=1/0.5 等） |
+| 统计 | `gonum.org/v1/gonum`（stat）；ROC/AUC/EER/1-NN（复现用途）/bootstrap **自写**（UPGMA/ARI 已移出 MVP） | 各几十行；须构造性单测（AUC=1/0.5 等） |
 | 报告 | `html/template`（**默认上下文感知转义**，天然防 XSS）+ 自写 SVG/ASCII 热力图 | 恶意端点注入 HTML/JS 无效；**`template.HTML`/`template.JS` 类型会绕过转义**——模型输出只进文本节点，SVG 结构由内部常量生成 |
 | 交叉编译 | `GOOS=windows|linux|darwin go build` | 单二进制分发（Windows 侧也可直接跑） |
 
@@ -573,7 +574,7 @@ onetoken drift --model qwen/qwen3-8b
 |---|---|---|
 | **M1** | store + 归一化 + JSD + 校准模块（Go）；论文数据复现（**先复刻论文实现语义**） | 前置门 pin 语义；分层值级回归通过（cell 级 0.075/0.489、模型对级 0.227/0.140，±5%）**且** AUC 0.971 / EER 7.3% ±2pp；算法单测就绪；**数据不可得时按 §9.1 兜底口径验收**（前置门空置、论文数值项 N/A、标注“语义未 pin”） |
 | **M2** | 统一调用层三协议 + 并发采集器 + 探测器 + 云端 API 参考 + 端到端审计 | 三协议各跑通一次 enroll（含 **URL 构造单测**，防双 /v1）；判定与校准后 τ 一致；探测器 flag 正确；≥2 开源模型（云端 API 建档） |
-| **M3** | 替换模拟实验 + 主辅操作点 + 报告 | τ_fpr1 处 TPR≥T（先定指标）；τ_fpr5 处 TPR≥90%；真/假目标各 ≥8；重复审计一致性 ≥80% |
+| **M3** | 替换模拟实验（公网冒充假目标）+ 主辅操作点 + 报告 | τ_fpr1 处 TPR≥T（先定指标）；τ_fpr5 处 TPR≥90%；真/假目标各 ≥8（本地 vLLM 分支已移出 MVP）；重复审计一致性 ≥80% |
 | **M4** | 调度 + 告警 + 漂移管理 + CLI 完整 | 140 次审计误报 ∈ 二项 CI（≈0–4）；注入替换全部捕获 |
 
 **目录结构（Go 惯例）**
@@ -591,7 +592,7 @@ onetoken/
 │   ├── detector/               # 测量有效性探测
 │   ├── fingerprint/            # 分布、基 2 JSD
 │   ├── verify/                 # 判定（含 inconclusive 缓冲）
-│   ├── calibrate/              # ROC/AUC/EER/bootstrap/1-NN/UPGMA/ARI
+│   ├── calibrate/              # ROC/AUC/EER/bootstrap/1-NN（复现用途；UPGMA/ARI 已移出 MVP）
 │   ├── store/                  # JSON/JSONL 文件存储（原子写/幂等/证据链）
 │   └── report/                 # 报告（html/template 转义）
 ├── config/
@@ -623,7 +624,7 @@ onetoken/
 
 ## 16. 风险与局限（诚实清单）
 
-1. **参考指纹获取是硬约束**：无第一方 API、无开源权重的模型只能做互比线索，无法严格验证；
+1. **参考指纹获取是硬约束**：无第一方 API、无开源权重的模型**无法严格验证**（原互比线索已移出 MVP，用户决策 2026-08-07，§3.5）；
 2. **错误率本质**：单次审计不是 100% 判定；误报优先操作点提高漏报率，需人工复核与重复审计；τ 小样本 CI 如实报告；
 3. **指纹漂移**：模型更新频繁的端点存在验证窗口错位风险；
 4. **闭源模型参考仅反映"官方 API 行为"**：官方 API 与聚合器端点即使权重相同也有分布差异（0.227 中位），阈值需跨通道校准；OpenRouter 多上游路由可能造成单端点审计不稳定；
@@ -636,4 +637,4 @@ onetoken/
 
 ---
 
-*本文档依据论文 arXiv:2607.10252 的协议与数据设计；v0.10 并入 M1.6 重放结果（七层对拍全命中：0.075/0.489/0.140/0.483、AUC 0.971318、EER 0.0729、1-NN 59.5%；**0.227 由 L8 复现命中 0.2230**——数据集同一 slug 多 provider 记录，同模型跨 provider 距离；preprocess 颜色/硬币词表对齐论文 canonical），M1.5 语义 pin 结果（JSD 原始标度/基 2/无平滑与既定实现一致、R pROC 工具链、采样参数确认，§3.3/§9.1/头部决策记录）；v0.8 并入用户决策（M1.5 数据兜底：Zenodo 不可得时前置门空置、改由用户自备权威数据替代、JSD 标度维持既定实现并标注未 pin，§3.3/§9.1，含审查后归因拆分与 §14 兜底分支）；v0.7 并入 M1.4 校准算法实现后的接口契约演进（§2.1 calibrate 签名、§3.4 τ_fpr 计算语义）；v0.6 并入 M1.3 实现后的接口契约演进（§2.1 fingerprint 签名、§3.3 T=0 变体语义）；v0.5 并入用户评审意见（统一提供商调用层、Go 性能选型、JSON/JSONL 存储）与五轮对抗式审查结论。*
+*本文档依据论文 arXiv:2607.10252 的协议与数据设计；**v0.21 落地优先方向（用户决策 2026-08-07）：验收口径保持统计严谨（M3/M4 不变），论文装饰性模块移出 MVP（UPGMA 聚类图、谱系信号 1-NN 投产、本地 vLLM 假目标），开发重心转向真实试点与工程落地功能**；v0.10 并入 M1.6 重放结果（七层对拍全命中：0.075/0.489/0.140/0.483、AUC 0.971318、EER 0.0729、1-NN 59.5%；**0.227 由 L8 复现命中 0.2230**——数据集同一 slug 多 provider 记录，同模型跨 provider 距离；preprocess 颜色/硬币词表对齐论文 canonical），M1.5 语义 pin 结果（JSD 原始标度/基 2/无平滑与既定实现一致、R pROC 工具链、采样参数确认，§3.3/§9.1/头部决策记录）；v0.8 并入用户决策（M1.5 数据兜底：Zenodo 不可得时前置门空置、改由用户自备权威数据替代、JSD 标度维持既定实现并标注未 pin，§3.3/§9.1，含审查后归因拆分与 §14 兜底分支）；v0.7 并入 M1.4 校准算法实现后的接口契约演进（§2.1 calibrate 签名、§3.4 τ_fpr 计算语义）；v0.6 并入 M1.3 实现后的接口契约演进（§2.1 fingerprint 签名、§3.3 T=0 变体语义）；v0.5 并入用户评审意见（统一提供商调用层、Go 性能选型、JSON/JSONL 存储）与五轮对抗式审查结论。*
