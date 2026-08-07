@@ -23,7 +23,8 @@ type auditFlags struct {
 	tau         float64 // 直传阈值（>0 时跳过校准库匹配，冒烟/临时用）
 	seed        int64
 	concurrency int
-	budgetCalls int // 审计预算（调用次数上限，0=不限；成本护栏 M3）
+	budgetCalls int  // 审计预算（调用次数上限，0=不限；成本护栏 M3）
+	reasoning   bool // 目标端点为推理模型（系统 2：max_tokens=ReasoningMaxTokens）
 	jsonOut     bool
 }
 
@@ -97,9 +98,13 @@ var auditCmd = &cobra.Command{
 		// T=1.0 审计采样：幂等续采 id = audit-<timestamp>-<rand>（随机后缀防并行
 		// 毫秒级碰撞共享响应文件/覆盖审计记录，审查 R-M6）
 		auditID := fmt.Sprintf("audit-%s-%s", time.Now().UTC().Format("20060102T150405.000Z"), randHex(8))
+		maxTokens := s.OutputTokenCap
+		if auditFlag.reasoning {
+			maxTokens = s.ReasoningMaxTokens // 推理通道（v0.19 系统 2）
+		}
 		cc := collector.Options{
 			ID: auditID, Model: auditFlag.claimed, Concurrency: conc,
-			MaxTokens: s.OutputTokenCap, OnProgress: progressToStderr("audit"),
+			MaxTokens: maxTokens, OnProgress: progressToStderr("audit"),
 			Budget: newBudget(auditFlag.budgetCalls),
 		}
 		rs, err1 := collector.RunBattery(runCtx(), client, st, b, selected, n, 1.0, cc)
@@ -139,8 +144,9 @@ var auditCmd = &cobra.Command{
 			N:             n,
 			Scope:         scope,
 			Calibrations:  cals,
-			RefChannel:    claimed.RefSource, // 参考通道
-			TargetChannel: srcName,           // 被审计端点 provider（校准分档键，审查 R-7）
+			RefChannel:    claimedChannel(claimed), // 参考通道（direct|reasoning，v0.19 同通道比对）
+			Channel:       claimedChannel(claimed), // 短路语义：推理通道思考链正常
+			TargetChannel: srcName,                 // 被审计端点 provider（校准分档键，审查 R-7）
 			T0Responses:   t0,
 			TauOverride:   auditFlag.tau, // >0 直传阈值（冒烟/临时），0=auto 查库
 		}
@@ -242,6 +248,7 @@ func init() {
 	fl.Int64Var(&f.seed, "seed", 0, "cell 选择种子（0=随机，落盘可复现）")
 	fl.IntVar(&f.concurrency, "concurrency", 0, "采集并发")
 	fl.IntVar(&f.budgetCalls, "budget-calls", 0, "审计预算（调用次数上限，0=不限；成本护栏）")
+	fl.BoolVar(&f.reasoning, "reasoning", false, "目标端点为推理模型（系统 2：max_tokens 加大采 post-reasoning 回答）")
 	fl.BoolVar(&f.jsonOut, "json", false, "stdout 输出 JSON")
 	_ = auditCmd.MarkFlagRequired("claimed-model")
 }

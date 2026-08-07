@@ -373,6 +373,7 @@ func toResponse(j job, T float64, r *provider.ResponseRecord) *store.Response {
 		Temperature:      T,
 		RawCompletion:    r.RawCompletion,
 		RawSHA256:        sha256Hex(r.RawCompletion),
+		Text:             r.Text,
 		ReasoningTokens:  r.ReasoningTokens,
 		CompletionTokens: r.CompletionTokens,
 		FinishReason:     r.FinishReason,

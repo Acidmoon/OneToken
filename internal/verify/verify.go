@@ -49,6 +49,10 @@ type Options struct {
 	K     int
 	N     int
 	Scope string
+	// Channel 参考指纹采样通道（direct|reasoning，v0.19）：推理通道下
+	// hidden-reasoning（思考链）属正常不短路，以 post-reasoning 回答有效性
+	// （ValidCells/cellsUsed）为准；空=direct。
+	Channel string
 	// Calibrations 校准库（store.LoadCalibrations）；匹配失败 → 拒绝审计。
 	Calibrations []store.Calibration
 	// RefChannel/TargetChannel 校准分档通道（参考指纹来源通道 / 审计目标通道）。
@@ -159,11 +163,12 @@ func VerifyAudit(responses []*store.Response, claimed *store.Fingerprint, opts O
 	res := &Result{KMinCells: opts.Settings.KMinCells}
 	for _, r := range rs {
 		if r.Classification == "" || r.Normalized == "" {
+			pc := preprocess.NormalizeClassify(r.Text, preprocess.Task{})
 			if task, ok := taskForCell(r.Cell); ok {
-				pc := preprocess.NormalizeClassify(r.RawCompletion, task)
-				r.Classification = string(pc.Classification)
-				r.Normalized = pc.Normalized
+				pc = preprocess.NormalizeClassify(r.Text, task)
 			}
+			r.Classification = string(pc.Classification)
+			r.Normalized = pc.Normalized
 		}
 	}
 
@@ -186,7 +191,16 @@ func VerifyAudit(responses []*store.Response, claimed *store.Fingerprint, opts O
 		res.Reason = "端点不可达（unreachable）"
 		res.Verdict = store.VerdictInconclusive
 		return res, nil
-	case scr.Flags.HiddenReasoning || scr.Flags.ResponseCaching || scr.Flags.TemperatureNotHonored:
+	case scr.Flags.HiddenReasoning && opts.Channel != "reasoning":
+		// 非推理通道的推理痕迹 → 排除（论文方法论）；推理通道（v0.19）思考链
+		// 属正常，不短路（post-reasoning 回答有效性由后续 k_min 门兜底）。
+		res.Reason = "测量有效性 flag: " + joinFlags(scr.Flags)
+		res.Verdict = store.VerdictInconclusive
+		return res, nil
+	case scr.Flags.ResponseCaching || (scr.Flags.TemperatureNotHonored && opts.Channel != "reasoning"):
+		// response-caching 两通道均拦截；temperature-not-honored 仅非推理通道
+		// 拦截——推理通道思考链在 T=0 下仍有随机性（DeepSeek 实测），
+		// 该探针不适用（v0.19 适配）。
 		res.Reason = "测量有效性 flag: " + joinFlags(scr.Flags)
 		res.Verdict = store.VerdictInconclusive
 		return res, nil

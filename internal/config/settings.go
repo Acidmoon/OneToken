@@ -4,14 +4,15 @@ package config
 // 所有魔法数字集中于此，代码引用配置而非常量。
 type Settings struct {
 	// 采样与审计默认（设计 §3.1）
-	EnrollNT1      int     // T=1.0 参考指纹采样次数 n（论文：30）
-	EnrollNT0      int     // T=0 采样次数（论文：3）
-	FrontierUSD    float64 // 前沿定价阈值：≥$5 / 1M 输入 token
-	FrontierNT1    int     // 前沿模型 T=1.0 采样次数（论文：15）
-	AuditK         int     // 审计默认探针 cell 数（8）
-	AuditN         int     // 审计默认每 cell 采样数（15）
-	OutputTokenCap int     // 输出上限（论文 12→16 最终值；按协议映射 max_tokens/max_output_tokens）
-	StoreOutput    bool    // Responses API store 参数（默认 false，不落 OpenAI 平台）
+	EnrollNT1          int     // T=1.0 参考指纹采样次数 n（论文：30）
+	EnrollNT0          int     // T=0 采样次数（论文：3）
+	FrontierUSD        float64 // 前沿定价阈值：≥$5 / 1M 输入 token
+	FrontierNT1        int     // 前沿模型 T=1.0 采样次数（论文：15）
+	AuditK             int     // 审计默认探针 cell 数（8）
+	AuditN             int     // 审计默认每 cell 采样数（15）
+	OutputTokenCap     int     // 输出上限（论文 12→16 最终值；按协议映射 max_tokens/max_output_tokens）
+	ReasoningMaxTokens int     // 推理通道（系统 2，v0.19）输出上限：思考链 + 最终回答完整输出（DeepSeek 实测 512 足够；按协议映射）
+	StoreOutput        bool    // Responses API store 参数（默认 false，不落 OpenAI 平台）
 
 	// 探测器（设计 §5）
 	T0ProbeN                  int     // T=0 一致性探针样本数（n≥5，二项换算）
@@ -52,14 +53,15 @@ type Settings struct {
 // DefaultSettings 返回阈值/采样参数默认值（集中配置的基准）。
 func DefaultSettings() Settings {
 	return Settings{
-		EnrollNT1:      30,
-		EnrollNT0:      3,
-		FrontierUSD:    5.0,
-		FrontierNT1:    15,
-		AuditK:         8,
-		AuditN:         15,
-		OutputTokenCap: 16,
-		StoreOutput:    false,
+		EnrollNT1:          30,
+		EnrollNT0:          3,
+		FrontierUSD:        5.0,
+		FrontierNT1:        15,
+		AuditK:             8,
+		AuditN:             15,
+		OutputTokenCap:     16,
+		ReasoningMaxTokens: 512,
+		StoreOutput:        false,
 
 		T0ProbeN:                  5,
 		MinValidSamples:           10,

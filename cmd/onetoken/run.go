@@ -131,6 +131,14 @@ func isLocalhostURL(base string) bool {
 	return false
 }
 
+// claimedChannel 返回参考指纹的采样通道（缺省 direct——旧指纹无 Channel 字段）。
+func claimedChannel(fp *store.Fingerprint) string {
+	if fp != nil && fp.Channel == "reasoning" {
+		return "reasoning"
+	}
+	return "direct"
+}
+
 // newClient 构造端点客户端（安全传输：SSRF/重定向/限流，M2.2）。
 func newClient(p config.ProviderConfig, s config.Settings) (*provider.Client, error) {
 	return provider.NewClientWithSettings(p, nil, s)

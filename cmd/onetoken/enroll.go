@@ -18,6 +18,7 @@ type enrollFlags struct {
 	family      string
 	modelType   string
 	frontier    bool
+	reasoning   bool
 	concurrency int
 	budgetCalls int
 	jsonOut     bool
@@ -76,6 +77,7 @@ var enrollCmd = &cobra.Command{
 			Version:      enrollFlag.version,
 			ProviderName: srcName,
 			Frontier:     enrollFlag.frontier,
+			Reasoning:    enrollFlag.reasoning,
 			Concurrency:  enrollFlag.concurrency,
 			OnProgress: func(phase string, done, total int) {
 				if phase == "t0" {
@@ -119,6 +121,7 @@ func init() {
 	fl.StringVar(&f.family, "family", "", "模型家族（如 qwen）")
 	fl.StringVar(&f.modelType, "model-type", "open-source", "open-source|proprietary")
 	fl.BoolVar(&f.frontier, "frontier", false, "前沿定价模型（≥$5/1M input，采样减半）")
+	fl.BoolVar(&f.reasoning, "reasoning", false, "推理端点（系统 2：max_tokens 加大，post-reasoning 回答指纹；缺省自动检测）")
 	fl.IntVar(&f.concurrency, "concurrency", 0, "采集并发（默认 8，上限 256）")
 	fl.IntVar(&f.budgetCalls, "budget-calls", 0, "建档预算（调用次数上限，0=不限；成本护栏）")
 	fl.BoolVar(&f.jsonOut, "json", false, "stdout 输出 JSON")

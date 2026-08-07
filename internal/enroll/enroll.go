@@ -53,6 +53,10 @@ type Options struct {
 
 	// Frontier 前沿定价模型（≥$5/1M input，设计 §3.1）：T=1.0 采样减为 FrontierNT1。
 	Frontier bool
+	// Reasoning 显式指定推理端点（系统 2，v0.19）：采集用 ReasoningMaxTokens，
+	// 指纹通道标注 reasoning（post-reasoning 回答指纹）。缺省时自动检测——
+	// 采集后 Screen 发现 hidden-reasoning 会以推理参数重采 T=1.0 段。
+	Reasoning bool
 	// Concurrency worker 数（<=0 → 默认 8）。
 	Concurrency int
 	// Budget 审计级预算（超限中止）。
@@ -113,9 +117,17 @@ func Enroll(ctx context.Context, opts Options) (*store.Fingerprint, error) {
 		}
 		return func(done, total int) { opts.OnProgress(phase, done, total) }
 	}
+	// 采集参数按通道（v0.19）：非推理 direct 用 OutputTokenCap(16)；
+	// 推理 reasoning 用 ReasoningMaxTokens(512)（思考链 + 最终回答完整输出）。
+	channel := "direct"
+	maxTokens := s.OutputTokenCap
+	if opts.Reasoning {
+		channel = "reasoning"
+		maxTokens = s.ReasoningMaxTokens
+	}
 	cc := collector.Options{
 		ID: refID, Model: opts.ModelID, Concurrency: conc,
-		MaxTokens: s.OutputTokenCap, // 接线 Settings.OutputTokenCap（审查 R-L3）
+		MaxTokens: maxTokens,
 		Budget:    opts.Budget, OnProgress: progress("t1"),
 	}
 
@@ -153,13 +165,7 @@ func Enroll(ctx context.Context, opts Options) (*store.Fingerprint, error) {
 	// Screen/Build，避免全部样本因空分类被跳过（M2.7 e2e 发现）。
 	taskFC := taskResolver(opts.Battery)
 	for _, r := range append(append([]*store.Response{}, rs1...), rs0...) {
-		if r.Classification == "" || r.Normalized == "" {
-			if task, ok := taskFC(r.Cell); ok {
-				pc := preprocess.NormalizeClassify(r.RawCompletion, task)
-				r.Classification = string(pc.Classification)
-				r.Normalized = pc.Normalized
-			}
-		}
+		backfill(r, taskFC)
 	}
 	// 段级失败率（审查 R-H1）：T1/T0 分段独立判定——T0 段全败不被 T1 成功稀释
 	// （全局比率会掩盖单段不可用）。Screen 的全局 unreachable 不适用，自行判定。
@@ -173,10 +179,50 @@ func Enroll(ctx context.Context, opts Options) (*store.Fingerprint, error) {
 	case ratio1 >= s.UnreachableFailRatio || ratio0 >= s.UnreachableFailRatio:
 		return nil, fmt.Errorf("enroll: 参考源不可达（T1 失败率 %.0f%% / T0 失败率 %.0f%%）",
 			ratio1*100, ratio0*100)
-	case scr.Flags.HiddenReasoning || scr.Flags.ResponseCaching || scr.Flags.TemperatureNotHonored:
+	case scr.Flags.ResponseCaching || scr.Flags.TemperatureNotHonored:
 		return nil, fmt.Errorf("enroll: 参考源测量有效性异常（%s），建档拒绝",
 			strings.Join(scr.Flags.List(), ","))
-	case scr.ValidCells < s.KMinCells:
+	}
+
+	// 推理通道分流（v0.19 系统 2）：hidden-reasoning 不再直接排除——
+	// ① 显式 Reasoning 或自动检测到 → 以 ReasoningMaxTokens 重采 T=1.0，
+	//    验证 post-reasoning 回答可提取（content 非空 → ValidCells 达标）；
+	// ② 重采后仍无回答 → 按论文排除（不可指纹化）。
+	if scr.Flags.HiddenReasoning && !opts.Reasoning {
+		channel = "reasoning"
+		maxTokens = s.ReasoningMaxTokens
+		cc.ID = refID + "-r"
+		cc.MaxTokens = maxTokens
+		cc.OnProgress = progress("t1-r")
+		r1, err1 = collector.RunBattery(ctx, opts.Provider, opts.Store, opts.Battery, cells,
+			n1, 1.0, cc)
+		if errors.Is(err1, provider.ErrBudgetExceeded) ||
+			errors.Is(err1, context.Canceled) || errors.Is(err1, context.DeadlineExceeded) {
+			return nil, err1
+		}
+		failed1 = collector.CountTaskFailures(err1)
+		rs1, err = opts.Store.LoadResponses(refID + "-r")
+		if err != nil {
+			return nil, fmt.Errorf("enroll: 读取推理重采响应失败: %w", err)
+		}
+		// 回填推理重采响应的派生列
+		for _, r := range rs1 {
+			backfill(r, taskFC)
+		}
+		scr = detector.Screen(rs1, detector.ScreenOptions{
+			Settings:    s,
+			T0Responses: rs0,
+			TaskForCell: taskFC,
+		})
+		ratio1 = failRatio(failed1, len(r1))
+	}
+	// 通道判定（推理通道：hidden-reasoning 属正常（思考链），以回答可用性为准）
+	if channel == "reasoning" {
+		if scr.ValidCells < s.KMinCells {
+			return nil, fmt.Errorf("enroll: 推理通道无 post-reasoning 回答（有效 cell %d < k_min %d），按论文排除",
+				scr.ValidCells, s.KMinCells)
+		}
+	} else if scr.ValidCells < s.KMinCells {
 		return nil, fmt.Errorf("enroll: 有效 cell %d < k_min %d，指纹不可用", scr.ValidCells, s.KMinCells)
 	}
 
@@ -200,6 +246,7 @@ func Enroll(ctx context.Context, opts Options) (*store.Fingerprint, error) {
 	// 4. 入库（审查 R-M2：先 models 后指纹——models 失败时指纹未落盘，重跑可重入；
 	// 指纹失败时 models 有登记无指纹，重跑不撞版本冲突）。
 	fp.Provider = opts.ProviderName
+	fp.Channel = channel         // direct | reasoning（v0.19 通道分档）
 	fp.SupersededBy = superseded // 版本链留痕（M4.2 扩展 per-version 布局的前置）
 	models, err := opts.Store.LoadModels()
 	if err != nil {
@@ -218,6 +265,21 @@ func Enroll(ctx context.Context, opts Options) (*store.Fingerprint, error) {
 		return nil, fmt.Errorf("enroll: 保存指纹失败: %w", err)
 	}
 	return fp, nil
+}
+
+// backfill 回填派生列（v0.19 修复：归一化/分类输入为提取的回答文本 Text，
+// 而非 RawCompletion——后者含响应唯一 id 会污染分布键）。
+// Text 为空 = 无回答（post-reasoning content 缺失/思考占满预算）→ 分类 empty
+// → 不入指纹（避免把 RawCompletion 当答案产生假指纹）。
+func backfill(r *store.Response, taskFC func(string) (preprocess.Task, bool)) {
+	if r.Classification == "" || r.Normalized == "" {
+		pc := preprocess.NormalizeClassify(r.Text, preprocess.Task{})
+		if task, ok := taskFC(r.Cell); ok {
+			pc = preprocess.NormalizeClassify(r.Text, task)
+		}
+		r.Classification = string(pc.Classification)
+		r.Normalized = pc.Normalized
+	}
 }
 
 // failRatio 计算失败率（分母为 0 时返回 0，避免除零）。

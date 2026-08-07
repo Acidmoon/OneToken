@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,10 +19,13 @@ import (
 // mockProvider 是 provider.Provider 桩：T=1.0 三值轮换（方差，防缓存误报），
 // T=0 固定答案；failAll 模拟端点不可达；reasoning 模拟推理痕迹。
 type mockProvider struct {
-	counter   atomic.Int64
-	failAll   bool
-	t0Fail    bool // 仅 T=0 段失败（T1 正常）
-	reasoning bool
+	counter    atomic.Int64
+	failAll    bool
+	t0Fail     bool // 仅 T=0 段失败（T1 正常）
+	reasoning  bool
+	noAnswer   bool // 推理但 content 为空（模拟思考占满预算）
+	sameAnswer bool // 全同响应（response-caching 触发）
+	uniqueID   bool // RawCompletion 含唯一 id（模拟真实端点；v0.19 回归：Text 管线）
 }
 
 var t1Answers = []string{"42", "57", "88"}
@@ -33,16 +37,25 @@ func (m *mockProvider) Complete(_ context.Context, rp provider.RequestParams) (*
 	raw := "42"
 	if rp.Temperature == 0 {
 		raw = "42" // T=0 确定性（探针样本不足不参与判定，无碍）
+	} else if m.sameAnswer {
+		raw = "42" // 全同：方差崩溃信号
 	} else {
 		raw = t1Answers[m.counter.Add(1)%int64(len(t1Answers))]
 	}
-	body := fmt.Sprintf(`{"choices":[{"message":{"content":%q},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":1}}`, raw)
+	content := raw
+	finish := "stop"
+	if m.noAnswer {
+		content = "" // 思考占满预算：无最终回答
+		finish = "length"
+	}
+	body := fmt.Sprintf(`{"id":"%s","choices":[{"message":{"content":%q},"finish_reason":%q}],"usage":{"prompt_tokens":5,"completion_tokens":1,"completion_tokens_details":{"reasoning_tokens":%d}}}`,
+		mockID(m.counter.Load()), content, finish, 42)
 	reasoning := 0
 	if m.reasoning {
 		reasoning = 42
 	}
 	return &provider.ResponseRecord{
-		Protocol: "chat", Text: raw, RawCompletion: body, FinishReason: "stop",
+		Protocol: "chat", Text: content, RawCompletion: body, FinishReason: finish,
 		ReasoningTokens: reasoning, CompletionTokens: 1, PromptTokens: 5,
 		TS: time.Now().UTC(),
 	}, nil
@@ -187,13 +200,14 @@ func TestEnrollFingerprintContent(t *testing.T) {
 // ---- 测量有效性门 ----
 
 func TestEnrollMeasurementFlag(t *testing.T) {
+	// 测量级 flag（response-caching：全同响应）仍拒绝建档（v0.19：仅 hidden-reasoning
+	// 改为推理通道分流，缓存签名语义不变）
 	b := testBattery(t)
 	s := testStore(t)
 	opts := baseOpts(b, s, "v1")
-	// 推理痕迹：mock 返回 ReasoningTokens>0 → hidden-reasoning → 建档拒绝
-	opts.Provider = &mockProvider{reasoning: true}
+	opts.Provider = &mockProvider{sameAnswer: true}
 	if _, err := Enroll(context.Background(), opts); err == nil {
-		t.Fatal("参考源含推理痕迹应拒绝建档")
+		t.Fatal("response-caching 应拒绝建档")
 	}
 }
 
@@ -299,3 +313,84 @@ func TestEnrollBudgetAbortSkipsT0(t *testing.T) {
 		t.Fatal("T=0 段不应有响应落盘")
 	}
 }
+
+// ---- 推理通道（系统 2，v0.19）----
+
+func TestEnrollReasoningAutoDetect(t *testing.T) {
+	// mock 带推理痕迹（reasoning_tokens>0）且 content 非空 → 自动重采 → 指纹 Channel=reasoning
+	b := testBattery(t)
+	s := testStore(t)
+	opts := baseOpts(b, s, "v1")
+	opts.Provider = &mockProvider{reasoning: true}
+	fp, err := Enroll(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fp.Channel != "reasoning" {
+		t.Fatalf("Channel=%q，期望 reasoning（自动检测推理通道）", fp.Channel)
+	}
+	if len(fp.Cells) < 3 {
+		t.Fatalf("推理通道指纹 Cells=%d 过少", len(fp.Cells))
+	}
+}
+
+func TestEnrollReasoningExplicit(t *testing.T) {
+	// 显式 --reasoning：直接走推理参数
+	b := testBattery(t)
+	s := testStore(t)
+	opts := baseOpts(b, s, "v1")
+	opts.Provider = &mockProvider{reasoning: true}
+	opts.Reasoning = true
+	fp, err := Enroll(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fp.Channel != "reasoning" {
+		t.Fatalf("Channel=%q，期望 reasoning（显式）", fp.Channel)
+	}
+}
+
+func TestEnrollReasoningNoAnswer(t *testing.T) {
+	// 推理但无 post-reasoning 回答（content 空）→ 按论文排除
+	b := testBattery(t)
+	s := testStore(t)
+	opts := baseOpts(b, s, "v1")
+	opts.Provider = &mockProvider{reasoning: true, noAnswer: true}
+	if _, err := Enroll(context.Background(), opts); err == nil {
+		t.Fatal("推理但无回答应排除建档")
+	}
+}
+
+// ---- v0.19 回归：响应含唯一 id 时指纹键必须是回答文本（非 RawCompletion） ----
+
+func TestEnrollUniqueIDNotPollutingDist(t *testing.T) {
+	b := testBattery(t)
+	s := testStore(t)
+	opts := baseOpts(b, s, "v1")
+	opts.Provider = &mockProvider{uniqueID: true} // RawCompletion 含唯一 id
+	fp, err := Enroll(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fp.Cells) < 3 {
+		t.Fatalf("Cells=%d 过少", len(fp.Cells))
+	}
+	// 任一 cell 的 dist 键必须是简短回答（归一化后），不得含响应 id 痕迹
+	for _, cd := range fp.Cells {
+		for k := range cd.Dist {
+			if strings.Contains(k, "id-") || strings.Contains(k, "objectchatcompletion") {
+				t.Fatalf("dist 键被 RawCompletion 污染: %q", k)
+			}
+			if len(k) > 20 {
+				t.Fatalf("dist 键过长（应为简短回答）: %q", k)
+			}
+		}
+	}
+}
+
+// mockID 生成伪唯一 id（模拟真实响应）。
+
+// ---- v0.19 回归：响应含唯一 id 时指纹键必须是回答文本（非 RawCompletion） ----
+
+// mockID 生成伪唯一 id（模拟真实响应；v0.19 回归用）。
+func mockID(seed int64) string { return fmt.Sprintf("id-%d", seed) }

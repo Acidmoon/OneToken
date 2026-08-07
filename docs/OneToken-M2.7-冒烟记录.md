@@ -77,3 +77,19 @@ onetoken audit --provider openrouter --claimed-model zhipu/glm-4.5 --k 8 --n 15
 1. 探测器 5 类 flag 的 `hidden-reasoning` 在真实端点**首次验证**——正确识别推理模型并拒绝建档（参考源不可信）；
 2. 单 token 指纹法不适用于推理模型（输出被推理占满，无直接采样分布）——这是论文明确的适用边界，非实现缺陷；
 3. 试点需**非推理模型端点**：如智谱 glm-4.5 系列、阿里 qwen 系列（非 thinking 版）、OpenAI gpt-4o-mini/gpt-5-mini 等（用户自选参考端点）。
+
+## 6. 推理通道试点（系统 2，v0.19，DeepSeek）
+
+**结论：推理通道（post-reasoning 回答指纹）端到端可行，但判别力弱于非推理通道，τ 需单独校准。**
+
+| 项目 | 结果 |
+|---|---|
+| 建档 deepseek-v4-flash / v4-pro（--reasoning，max_tokens=512） | ✅ 两模型均成功（Channel=reasoning，40 cell 全有效） |
+| 指纹质量 | ✅ dist 键为简短回答（h/t/blue/东京…）；**Text 管线修复**：归一化输入为提取的回答文本，非 RawCompletion（后者含响应唯一 id 会污染分布键——真实端点暴露、mock 掩盖） |
+| 同端点 audit（claimed=flash，端点=flash，--reasoning） | ✅ **pass**，score=0.084（思考后回答的同模型噪声） |
+| 跨模型 audit（claimed=flash，端点=pro） | k=8 抽样 0.1506（<τ=0.20 漏报）；**40 cell 全量 0.2376**（17/40 cell >0.2） |
+| 判别力对比 | 推理通道 genuine 0.084 / impostor 0.238 vs 非推理 0.075 / 0.489——思考后回答更同质化（偏好信号被思考校正），间距窄 |
+| 探测器适配 | hidden-reasoning 分流（不排除）；temperature-not-honored 对推理通道跳过（思考链 T=0 下仍随机） |
+| 硬币偏好信号 | 推理模型思考后仍 h 偏好（28/30）——论文信号的推理通道形态 |
+
+**推理通道 τ 建议**：单独校准（genuine ~0.08 / impostor ~0.24 量级），τ 取 0.15 附近；k=8 抽样波动大（impostor 0.15 漂移），审计建议 k=16 或全 cell 提升稳定性。M2.9 正式校准待 ≥2 推理模型的 genuine/impostor 全量数据。

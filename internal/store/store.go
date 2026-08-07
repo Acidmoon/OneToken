@@ -72,6 +72,7 @@ type Fingerprint struct {
 	CollectedAt   string              `json:"collected_at"` // UTC Z
 	RefSource     string              `json:"ref_source"`
 	Provider      string              `json:"provider,omitempty"` // 参考来源 provider（§7.2 同 provider 比对优先）
+	Channel       string              `json:"channel,omitempty"`  // 采样通道：direct（非推理，缺省）| reasoning（post-reasoning 回答指纹，v0.19 系统 2）
 	Cells         map[string]CellDist `json:"cells"`              // "task:lang" -> 分布
 	T0Cells       map[string]CellDist `json:"t0_cells,omitempty"`
 	QCFlags       []string            `json:"qc_flags,omitempty"`
@@ -86,6 +87,7 @@ type Response struct {
 	PromptHash       string          `json:"prompt_hash,omitempty"`
 	RawCompletion    string          `json:"raw_completion"`
 	RawSHA256        string          `json:"raw_sha256"`
+	Text             string          `json:"text,omitempty"` // 提取的回答文本（post-reasoning content；归一化/分类输入，非 RawCompletion）
 	Normalized       string          `json:"normalized,omitempty"`
 	Classification   string          `json:"classification"` // valid|invalid|refusal|empty
 	ReasoningTokens  int             `json:"reasoning_tokens,omitempty"`
