@@ -1,6 +1,6 @@
 # OneToken 实施计划（任务拆分与状态跟踪）
 
-> **角色**：本文件是**项目进度的唯一真相**。设计依据见 `docs/OneToken-工程设计方案.md`（当前 v0.21），验收标准以设计文档为准，本文件负责把设计拆成可执行任务并跟踪状态。
+> **角色**：本文件是**项目进度的唯一真相**。设计依据见 `docs/OneToken-工程设计方案.md`（当前 v0.22），验收标准以设计文档为准，本文件负责把设计拆成可执行任务并跟踪状态。
 > **更新规则**：**每次完成任何实质性工作后必须更新本文件**（勾选状态、填日期与备注、按 AGENTS.md §3.1/§3.2 追加 §7 决策日志与 §8 更新日志）；收到反馈或评审意见后，先更新相关文档（本文件与设计文档），再动手改代码。规则详见 `AGENTS.md`。
 
 ---
@@ -16,7 +16,7 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 |---|---|---|---|
 | **P0** | Go 项目脚手架、配置骨架 | §10、§14 | ✅ 完成（2026-08-05） |
 | **M1** | 存储层（JSON/JSONL）/ preprocess / JSD / 校准 + Zenodo 论文复现（**不可得时按 §9.1 兜底**） | §3.2、§3.3、§3.4、§4、§9.1 | ✅ 完成（2026-08-06） |
-| **M2** | 统一提供商调用层（三协议）+ 采集 + 探测 + 云端 API 参考 + 端到端审计 | §2、§5、§6、§7、§9.2 | 🔄 进行中（M2.1–M2.7 + M2.9 实现完成 2026-08-06；M2.8 验收待真实试点；M2.9 推理 τ 正式校准待办） |
+| **M2** | 统一提供商调用层（三协议）+ 采集 + 探测 + 云端 API 参考 + 端到端审计 + compare 直比 | §2、§5、§6、§7、§9.2 | 🔄 进行中（M2.1–M2.7 + M2.9 实现完成 2026-08-06；M2.8 验收待真实试点；M2.9 推理 τ 正式校准待办；M2.10 compare 直比待办——2026-08-07 用户决策新增） |
 | **M3** | 替换模拟实验 + 主辅操作点 + 报告模块 | §3.4、§9.3 | ⬜ 待办 |
 | **M4** | 调度 + 告警 + 漂移管理 + CLI 完整 + 长期验收 | §9.4、§12、§15 | ⬜ 待办 |
 
@@ -65,8 +65,9 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 | **M2.5** verify 判定 | ① 指纹距离（复用 M1.3）；② τ 匹配：按 (k,n,通道) 查校准库，无匹配档→拒绝或强制全电池校准；③ inconclusive 缓冲（\|s−τ\| 在 bootstrap CI 内） | M1.3、M1.4、M2.4 | 判定逻辑单测（pass/suspicious/inconclusive 三分支） | ✅ 2026-08-06：`internal/verify` 包（`Judge`/`MatchCalibration`/`VerifyAudit`）：三分支判定（pass ≤ τ−buf / suspicious > τ+buf / inconclusive \|s−τ\|≤buf，τ CI 缺口裁决为绝对缓冲 TauInconclusiveBuffer=0.02）；分档匹配 (k,n,scope,通道) 精确（Scope 空串只命中空档，防顺序依赖误配）；无匹配档 → ErrNoCalibration 拒绝审计；测量有效性联动（3 类 flag+unreachable → inconclusive 短路先于指纹；safety-layer-change 告警不阻断）；**fail-closed**：cellsUsed<k_min 或 0 → inconclusive（防无共同 cell 假 pass）；证据链哈希校验（RawSHA256 读侧补全）+ 入参副本回填（并发安全）+ τ 合法性（有限且 ∈[0,1]）+ CellsDetail 输出；**9 新增测试（累计 230）**，-race/vet 全绿；**三视角审查后修复**（见 §7） |
 | **M2.6** reference 云端 API 单通道 | ① OfficialAPI：厂商官方 / 聚合器端点经统一调用层（§7.2，**唯一通道**——用户决策 2026-08-06：不做本地部署参考，原 LocalHost vLLM/Ollama 权重校验/同权重形状校验不再需要）；② enroll 编排：采集（collector）→ 清洗（preprocess/detector）→ 指纹构建（fingerprint.Build）→ 入库版本化（指纹 `UNIQUE(model_id,version)` + models.json 登记 + 标注来源 provider）；③ 交叉校验（可选）：同模型多 provider 建档，跨 provider 距离（M1.6 实测 0.2230）作为服务栈差异基线，不进默认判定路径 | M1.1、M2.1–M2.5 | ~~本地通道权重一致性断言~~（不适用）；enroll 版本化单测 | ✅ 2026-08-06：`internal/enroll` 包（`Enroll(ctx, Options) (*store.Fingerprint, error)`）：版本唯一性（UNIQUE 检查 + SupersededBy 版本链留痕）、双段采集（T=1.0 EnrollNT1/前沿 FrontierNT1 + T=0 EnrollNT0 独立续采 id）、测量有效性门（hidden-reasoning/response-caching → 拒绝建档；**段级 unreachable**——T1/T0 分段独立失败率，T0 段全败不被稀释）、采样参数联动校验（n1≥MinValidSamples、KMinCells≥1）、证据链（RawSHA256 已由 collector 保证 + 指纹从盘上响应构建）、入库顺序（先 models 后指纹防不可重入半状态）、Provider 结构化标注（Fingerprint/Model 新增字段）、refID 复用 store.SanitizeID（消除碰撞面）；**temperature-not-honored 门在默认 EnrollNT0=3 下不生效**（探针不足，归审计侧，代码注释留痕）；**7 新增测试（累计 242）**，-race/vet 全绿；**三视角审查后修复**（见 §7） |
 | **M2.7** CLI 与端到端冒烟 | ① `enroll/probe/audit` 命令 + 直传参数（`--base-url --api-key-env --protocol [--headers]`，密钥走环境变量）；② 试点：**云端 API 建档 Qwen3-8B 等（≥2 开源模型，参考端点由用户自定）** → 同名端点 audit（**判定与校准后 τ 一致、如实报告距离**、不预设 pass；记录上游 provider 字段）；③ 三协议各跑通一次 enroll（openai-responses / anthropic / 其他云端 chat 端点）；④ impostor 冒充（不同模型）→ suspicious | M1.1、M2.5、M2.6 | 端到端冒烟记录（含实际距离、上游字段、探测器 flag） | ✅ 2026-08-06：CLI 三命令（cobra：enroll/probe/audit）+ 直传参数（密钥 env、敏感头直传拒绝、并发接线 min(flag, Limits.MaxConcurrency, 256)）；audit（--tau auto 查库/无档拒绝 + --tau 直传冒烟、seed 持久化、上游 provider 透传 X-Openrouter-Via → Audit/输出）；probe（T=0 n≥5 探针 + T=1.0 n≥CacheMinN、段级 unreachable）；**mock 端到端 9 用例**（同模型 pass/impostor suspicious/三协议 enroll/无库拒绝/上游透传/probe/未 enroll 拒绝/help<50ms）；`docs/OneToken-M2.7-冒烟记录.md`；**真实云端试点待用户密钥**（指引见冒烟记录 §3）；**三视角审查后修复**（见 §7） |
-| **M2.8** M2 验收评审 | 逐条对照设计文档 §9.2：探测器 flag 断言、三协议 enroll、≥2 开源模型、端到端判定一致性 | M2.7 | 验收清单逐项勾选；未过项入下一迭代 | ⬜ |
+| **M2.8** M2 验收评审 | 逐条对照设计文档 §9.2：探测器 flag 断言、三协议 enroll、≥2 开源模型、端到端判定一致性、**compare 无需建档直比可判（mock 同模型 pass / 冒充 suspicious）** | M2.7、M2.10 | 验收清单逐项勾选；未过项入下一迭代 | ⬜ |
 | **M2.9** 推理通道适配（系统 2，v0.19 决策） | ① 探测器 hidden-reasoning 语义改为分流（reasoning_tokens>0/finish=length → 标记推理通道，不直接排除）；② 采集参数按通道：推理通道 max_tokens=ReasoningMaxTokens(512) 重采，验证 post-reasoning 回答可提取（content 非空、finish=stop）；③ 指纹通道分档：RefChannel/TargetChannel 支持 reasoning，τ 单独校准（推理通道 genuine/impostor 基线实测）；④ enroll/audit 同通道比对；⑤ 重采后仍无回答 → 按论文排除 | M2.1–M2.7（DeepSeek 实测可行性已验证） | 推理通道建档/审计端到端；推理 genuine/impostor 距离基线（≥2 推理模型）；探测分流单测 | ✅ 2026-08-06：推理通道端到端实现（enroll --reasoning/自动检测、指纹 Channel=reasoning、verify/audit 同通道判定、T=0 探针推理跳过）；**关键修复**：归一化输入改为提取的 Text（RawCompletion 含唯一 id 污染分布键）；**真实试点 + 稳定性实验**（DeepSeek v4-flash/pro 建档、同端点 pass 0.084、同模型两次独立 0.1116≈基线、跨模型 0.238 可复现——设计 v0.20）；**推理通道 τ 正式校准（genuine/impostor 全量）与 k≥16 审计建议落地**待办 |
+| **M2.10** compare 直比模式（v0.22 决策） | ① verify 内置参考线 τ（direct 0.140 / reasoning 0.16，标注“未校准”；优先级 **--tau 直传 > 校准库匹配档 > 内置线**，`Result.TauSource` 留痕）；② CLI `compare` 子命令（`--ref-*`/`--target-*` 直传参数 + `--ref-headers/--target-headers k=v,...`，复用 M2.7 直传校验：base_url 严格校验/密钥 env/敏感头拒绝）；③ 双路并发采集（两个 RunBattery 并行，各自限流预算与进度，续采索引内存/临时 store）；④ 现场指纹构建（内存不落库；`--save-ref` 可选落库等价 enroll——命名参数 `--ref-model-id` 必填；`--save-responses` 落两端点响应 JSONL 取证）；⑤ 输出：stdout 简洁判定摘要（判定徽标+距离+cellsUsed+通道+τ 来源+**参考端点来源**+关键证据）+ **HTML 比较报告**（距离点 vs 三参考线 0.075/0.140/0.227 + 生效判定线/逐 cell JSD 排序/分布对比/两端点 QC）+ `--json` 结构化；⑥ reporter 最小实现（被本任务拉动，M3.3 ① ② 子集） | M2.7 | mock e2e：同模型 pass / 冒充 suspicious；τ 来源优先级断言（--tau > 校准库 > 内置线）；内置参考线“未校准”标注；**默认不落库断言（无 --save-* 时不写 models/fingerprints/responses）**；**stdout 仅摘要断言（无表格）**；HTML 报告样例 + XSS 注入用例；JSON schema 断言；双路并发与单路耗时对比 | ⬜ |
 
 **M2 完成标准**：三协议可用 + 端到端审计链路通 + 探测器全 flag 正确（设计文档 §14 M2 行）。
 
@@ -78,7 +79,7 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 |---|---|---|---|---|
 | **M3.1** 假目标构造 | ① 公网：不同模型端点冒充（impostor）；~~② 本地可控：vLLM 加载 AWQ/GPTQ 量化权重、旧版 checkpoint~~ **已移出 MVP**（用户决策 2026-08-07：需 GPU 环境、投入产出比低；公网冒充已覆盖核心 T1 替换场景） | M2.7 | 假目标清单可复现 | ⬜ |
 | **M3.2** 主辅操作点评估 | ① 真/假目标各 **≥8**；② 每端点重复审计 **≥5 次**取判定序列，报告二项 CI；③ **主评估点 τ_fpr1**：TPR ≥ T（T 由 M1 校准数据预先确定并记录，预计 60–80%，如实报告 CI）；④ **辅评估点 τ_fpr5**：TPR ≥ 90%；⑤ 同端点重复审计 verdict 一致性 ≥ 80% | M3.1、M1.4 | 评估报告：两个操作点的 FPR/TPR 对 + CI；数值先定指标后定值 | ⬜ |
-| **M3.3** 报告模块 | ① 单端点报告（逐 cell JSD 明细、QC flags）；② 距离矩阵热力图；~~③ UPGMA 聚类图（v1.1，复刻论文 Fig.2）~~ **已移出 MVP**（用户决策 2026-08-07，搁置）；④ HTML 输出经 `html/template` 默认转义（模型输出只进文本节点，SVG 结构内部常量生成） | M2.7 | 报告样例 + XSS 注入用例（恶意 raw 文本被转义） | ⬜ |
+| **M3.3** 报告模块 | ① 单端点报告（逐 cell JSD 明细、QC flags）；② 距离矩阵热力图；~~③ UPGMA 聚类图（v1.1，复刻论文 Fig.2）~~ **已移出 MVP**（用户决策 2026-08-07，搁置）；④ HTML 输出经 `html/template` 默认转义（模型输出只进文本节点，SVG 结构内部常量生成）；**备注：① ② 的 compare 报告子集已由 M2.10 先行实现（分布对比/三参考线图/逐 cell JSD 排序），本任务补全与 audit/calibrate/drift 的整合** | M2.7、M2.10 | 报告样例 + XSS 注入用例（恶意 raw 文本被转义） | ⬜ |
 | **M3.4** M3 验收评审 | 逐条对照设计文档 §9.3 | M3.2、M3.3 | 验收清单逐项勾选 | ⬜ |
 
 **M3 完成标准**：主辅操作点评估完成 + 报告可用（设计文档 §14 M3 行）。
@@ -114,6 +115,7 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 | R8 | 成本：前沿模型建档 $1–5 为工程外推 | M2.6 实测后修正；预算按 $0.21 取 | 开放 |
 | R9 | 外部依赖：Zenodo 数据可获取性 | M1.5 先行下载 + 校验和 + 固定版本；**数据不可得 → M1.5 空置（用户决策 2026-08-05），改用用户自备权威数据（官方 API/账号采集）** | 开放 |
 | R10 | 合规边界：仅付费配额内普通请求、统计偏差报告 | 设计文档 §16 第 5 条 | 开放 |
+| R11 | 内置参考线未校准：direct 0.140 / reasoning 0.16 为中位数口径基线，非 ROC 校准操作点，误报/漏报率未知 | compare 判定带 τ 来源标注 + HTML 报告落线位置可视化 + 试点如实记录 + 正式使用前 calibrate 校准（M3 校准后更新内置值） | 开放 |
 
 ---
 
@@ -136,6 +138,7 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 | 2026-08-06 | **设计 v0.10（M1.6 重放 + 词表对齐）**：八层对拍全命中（0.075/0.489/0.140/0.483/0.227-L8/0.971318/0.0729/59.5%）；preprocess 颜色/硬币词表对齐论文 canonical（coin h/t、颜色 22 码）；0.227 复现路径（同 slug 多 provider） | M1.6 结果 + 审查 |
 | 2026-08-06 | **M1.7 验收通过（M1 完成）**：98 单测 + 八层回归全命中；§9.1 验收 11 通过 + 1 移交（URL 单测→M2.1）+ 1 不适用（数据兜底）；docs/OneToken-M1-验收报告.md | M1.7 评审 |
 | 2026-08-07 | **落地优先方向（用户意见）**：工作须能落地、不重论文学术性、挑重点落实——① **验收口径不放水**：M3/M4 统计验收保持原口径（真/假目标各 ≥8、二项 CI、预定义 TPR、14 天×10 端点）；② **论文装饰性模块移出 MVP**：UPGMA 聚类图（原 v1.1）、谱系信号 LOO 1-NN 投产（原 v1.2，实现仅复现用途）、本地 vLLM 假目标（M3.1 本地分支）；③ **开发重心转向工程落地**：真实试点（M2.8，待用户密钥）→ 报告/漂移/调度/备份等实用功能；设计 v0.21 同步 | 用户意见 |
+| 2026-08-07 | **compare 直比模式（用户意见）**：参考来源与待测端点均用户直传（base_url+key+protocol）、**无需先建档**——`onetoken compare` 双路并发现场采集 → 内存参考指纹（默认不落库，--save-ref 可选）→ 直接比对；无校准库时用**内置参考线**（direct 0.140 / reasoning 0.16，标注“未校准”；优先级 --tau > 校准库 > 内置线）；输出 **HTML 比较报告 + JSON**（用户选择，非 CLI 表格；stdout 仅简洁判定摘要）；enroll+audit 保留（长期监控/漂移）；**新增 M2.10 任务**；设计 v0.22 同步（§1.1/§2.2/§8/§9.2/§14/末尾版本说明） | 用户意见 |
 
 ---
 
@@ -191,6 +194,7 @@ P0 脚手架 ──→ M1 核心算法与论文复现 ──→ M2 统一调用�
 | 2026-08-06 | **M2.4 完成（detector 测量有效性）+ 设计 v0.13**：`Screen(responses, ScreenOptions) *Result` 实现设计 §2.1（入参原始响应、出参 5 类 Flags+统计，cleaned 由调用方据 Flags 过滤）；**口径留痕**（设计 §5 末段）：截断信号跨协议（length/max_tokens/max_output_tokens）、退化启发式可达性受护栏约束（护栏归因 M2.5）、T=0 实现为自洽性（参考比对降级，主距离兜底）、偏好任务/closed 空间缓存豁免、延迟联合默认禁用（可被端点欺骗）、unreachable 失败计数经 `collector.CountTaskFailures`、safety 基线指针化、o 系 gate 归属 M2.7 能力探测、k_min 双口径 M2.5 裁决；**三视角审查修复 12 项**：高——Anthropic max_tokens 截断漏报（匹配集合扩充）；中——偏好任务缓存误报（favorite 前缀豁免+closed 空间校准）、T0 ratio>1/NaN 兜底、judged 门槛（T0MinJudgedCells=3）、T0 归一化比较、RefusalBaseline 零值误用（改指针）、TaskForCell 未命中静默（Unknown 计数）、unreachable 失败统计生产者（CountTaskFailures 修复 joinError As 吞兄弟）、ValidRateQC 死配置接线（ValidRateLow）；低——7-39 灰区注释、CompletionTokens 含 reasoning token 口径注记 | 三视角审查（正确性/安全/需求符合性） |
 
 | 2026-08-07 | **落地优先方向（用户意见）+ 设计 v0.21**：验收口径保持统计严谨不放水（M3/M4 不变）；论文装饰性模块移出 MVP——UPGMA 聚类图（原 v1.1）、谱系信号 LOO 1-NN 投产（原 v1.2）、本地 vLLM 假目标（M3.1 本地分支）；设计文档同步 v0.21（头部决策记录/§1.2 范围声明/§2.1/§2.2/§3.4/§3.5/§6.1 示例注记/§7.2/§7.3/§8/§9.1/§9.3/§10/§14/末尾版本说明）；**三视角审查后修复**：§2.2/§7.2/§7.3 互比降级活跃引用补标注（原引 §3.5 已搁置）、R1 缓解列更新、M1.4 投产路径补注、§9.1 ARI 口径注记、§6.1 本地参考示例残留清理；下一步：真实试点（M2.8，待用户密钥）优先，密钥到位前可推进报告/漂移等不依赖真实端点的落地功能 | 助手 |
+| 2026-08-07 | **compare 直比模式（用户意见）+ 设计 v0.22 + 新增 M2.10**：参考/待测端点均用户直传、无需先建档；内置参考线判定（direct 0.140 / reasoning 0.16，未校准标注；优先级 --tau > 校准库 > 内置线）；参考指纹默认不落库（--save-ref 可选）；输出 HTML 比较报告 + JSON（stdout 简洁摘要）；设计文档同步 v0.22（§1.1 目标 bullet/§2.2 compare 数据流/§8 CLI 示例/§9.2 试点/§14 M2 行/架构图命令列表/末尾版本说明）；M2.10 任务含 reporter 最小实现（M3.3 ① ② 子集前置）；下一步：**M2.10 compare 实现（mock e2e，不依赖密钥）可先行**；真实试点（M2.8/§9.2 compare 试点）待密钥 | 助手 |
 
 ---
 

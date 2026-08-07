@@ -2,7 +2,7 @@
 
 > **依据论文**：《One Token Is Enough: Fingerprinting and Verifying Large Language Models from Single-Token Output Distributions》（arXiv:2607.10252，Tomáš Bruckner）
 >
-> **文档状态**：v0.21（**落地优先方向，用户决策 2026-08-07**：工作须能落地、不重论文学术性、挑重点落实——① **验收口径不放水**：M3/M4 统计验收保持原口径（真/假目标各 ≥8、二项 CI、预定义 TPR、14 天×10 端点长期验收），检测能力必须经得起验证；② **论文装饰性模块移出 MVP**：UPGMA 聚类图（论文 Fig.2 复刻，原 v1.1）、谱系信号 LOO 1-NN 投产（原 v1.2）、本地 vLLM 假目标（M3.1 本地分支）；③ **开发重心转向工程落地**：真实试点（M2.8）优先，随后报告/漂移/调度/备份等实用功能；v0.20 推理通道稳定性实测内容保留于 §1.2/§3.4/§7.2/§9.2）
+> **文档状态**：v0.22（**compare 直比模式，用户决策 2026-08-07**：参考来源与待测端点均用户直传配置，**无需先建档**——`onetoken compare` 双路并发现场采集 → 内存构建参考指纹 → 直接比对判定；默认不落库（--save-ref 可选）；无校准库时用**内置参考线**（direct 0.140 / reasoning 0.16，标注未校准，--tau 可覆盖）；输出 HTML 比较报告 + JSON；v0.21 落地优先方向见下）
 > **决策记录**：
 > - 实现语言：**Go**（IO 密集场景，启动毫秒级、单二进制、goroutine 并发天然适配批量采集；开发/迭代快）——用户拍板。
 > - **统一提供商调用层为系统核心**：任意 BaseURL + API Key 即可请求，三种协议适配（OpenAI Responses / OpenAI chat completions 兼容 / Anthropic messages），参考注册（enroll）与待审核模型（audit）共用此层——用户评审意见 1。
@@ -11,6 +11,7 @@
 > - 首个试点目标：云端 API 建档（Qwen3-8B 等 ≥2 开源模型，**参考端点由用户自定**）→ 同名端点审计（§9.2）。
 > - 操作点：默认误报优先（τ 对应 FPR≈1%），附 τ_fpr5 辅评估点；阈值按 (k, n, 通道) 分档存储（§3.4、§4）。
 > - **落地优先方向（v0.21，用户意见 2026-08-07）**：工作须能落地、不重论文学术性、挑重点落实——验收口径**不放水**（M3/M4 统计验收保持）；论文装饰性模块**移出 MVP**：UPGMA 聚类图（原 v1.1，不复刻论文 Fig.2）、谱系信号 LOO 1-NN 投产（原 v1.2，1-NN 实现仅 M1.6 复现用途）、本地 vLLM 假目标（M3.1 本地分支）；开发重心：真实试点（M2.8）→ 报告/漂移/调度/备份等落地功能。
+> - **compare 直比模式（v0.22，用户意见 2026-08-07）**：参考来源与待测端点均用户直传（base_url+key+protocol），**无需先建档**——`onetoken compare` 双路并发现场采集 → 内存构建参考指纹（默认不落库，--save-ref 可选）→ 直接比对判定；无校准库时用**内置参考线**（direct 0.140 / reasoning 0.16，标注“未校准”，--tau 可覆盖）；输出 HTML 比较报告（三参考线距离图/逐 cell JSD 排序/分布对比/QC flags）+ `--json` 结构化；enroll+audit 保留用于长期监控与漂移管理。
 > - **M1.5 前置门 pin 结果（v0.9）**：论文软件归档（Zenodo 21278793）核对完成——JSD 基 2、**原始标度（不取 sqrt）**、0·ln0=0 无平滑、cell 双方 ≥10 有效样本、R pROC 做 ROC/EER；与 Go 实现（M1.3/M1.4）完全一致，零改动；采样参数（T=1.0 n=30、T=0 n=3、前沿 n=15、max_tokens=16、四语言）与 §P0.3 一致；详见 `docs/OneToken-M1.5-语义pin记录.md`。
 
 ---
@@ -25,6 +26,7 @@
 - **量化顶替**：用激进量化/蒸馏变体代替全精度版本；
 - **版本回退**：服务旧版本 checkpoint；
 - **跨 provider 行为漂移**：同一模型在不同服务商上分布显著偏离（潜在部署异常）。
+- **直比模式（compare，v0.22）**：用户直传参考端点与待测端点（base_url+key+protocol），**无需预先建档**，即时采集比对判定，输出直观比较报告（HTML/JSON）——快速判断「两个端点是否同一个模型」的核心入口。
 
 ### 1.2 系统边界（做什么/不做什么）
 
@@ -55,10 +57,10 @@
 ## 2. 系统架构
 
 ```
-                    ┌─────────────────────────────────────────────┐
-                    │            onetoken (Go, 单二进制)            │
-                    │  enroll / audit / calibrate / probe / report │
-                    └──────────────┬──────────────────────────────┘
+                    ┌────────────────────────────────────────────────────────┐
+                    │                onetoken (Go, 单二进制)                 │
+                    │      compare/enroll/audit/calibrate/probe/report       │
+                    └───────────────┬────────────────────────────────────────┘
                                    │
         ┌──────────────┬───────────┼───────────────┬──────────────┐
         ▼              ▼           ▼               ▼              ▼
@@ -95,21 +97,21 @@
 |---|---|---|
 | `internal/provider` | **统一调用层（§6）**：三协议适配、协议协商、单请求级重试（429/5xx 分类、Retry-After 解析、jitter）、逐响应元数据、响应字节/完成长度上限、成本护栏 | `type Provider interface { Complete(ctx, Req) (*ResponseRecord, error) }` |
 | `internal/battery` | 40-cell 探针电池定义与提示词加载（与配置分离） | `Battery`（10 任务 × 4 语言，cell 清单） |
-| `internal/collector` | 并发采集：worker pool（per-provider 并发上限 4–8，硬上限 256）、幂等键、可恢复续采、种子打乱、限流预算、失败重试与总 deadline | `RunBattery(ctx, provider.Provider, *store.Store, *battery.Battery, cells []string, n int, T float64, Options) ([]*store.Response, error)`（M2.3 具化：幂等续采需 store 索引、提示词组装需 battery、并发/预算/进度经 Options；`[]Raw` 具化为 `[]*store.Response` 含证据链哈希与元数据） |
+| `internal/collector` | 并发采集：worker pool（per-provider 并发上限 4–8，硬上限 256）、幂等键、可恢复续采、种子打乱、限流预算、失败重试与总 deadline | `RunBattery(ctx, provider.Provider, *store.Store, *battery.Battery, cells []string, n int, T float64, Options) ([]*store.Response, error)`（M2.3 具化：幂等续采需 store 索引、提示词组装需 battery、并发/预算/进度经 Options；`[]Raw` 具化为 `[]*store.Response` 含证据链哈希与元数据）；**M2.10 compare 变体**：双路并发各自独立 `RunBattery` 实例（限流预算按 provider 独立）；不落库路径用内存/临时 store（幂等索引在内存，`--save-responses` 时用常规 store） |
 | `internal/preprocess` | **归一化 + 分类**（valid/invalid/refusal/empty），在采样与探测之前运行 | `NormalizeClassify(raw) → Processed` |
 | `internal/detector` | 测量有效性探测与清洗（依赖 preprocess 分类结果），与 verify 解耦 | `Screen(responses []*store.Response, ScreenOptions) *Result`（M2.4 具化：设计 `Screen(processed)→{ok,flags,cleaned}` 的入参为原始响应（分类可预填或经 TaskForCell 现算），出参 Result 含 5 类 Flags + per-cell 统计 + ValidCells/KMinCells（inconclusive 信号）；cleaned 语义由调用方据 Flags 过滤实现；ScreenOptions：Settings/T0Responses/RefusalBaseline(nil=无)/FailedTasks/TotalTasks/TaskForCell） |
 | `internal/fingerprint` | 分布估计、**基 2 JSD（自写，直接按论文 Eq.1）**、指纹对象（构建自 `store.Fingerprint`） | `Distance(a, b *Fingerprint) (float64, int)`——返回 (距离, 参与 cell 数)，参与数供上层按有效 cell < k_min 判 inconclusive；`Build(responses) (*Fingerprint, error)` |
-| `internal/verify` | 判定：JSD vs τ（按 (k,n,scope,通道) 匹配校准库），含 inconclusive 缓冲 | `VerifyAudit(responses []*store.Response, claimed *store.Fingerprint, Options) (*Result, error)`（M2.5 具化：设计 §2.1 的 `Verify(ctx, target Provider, claimed, k, n)` 为端到端含采集，由 M2.7 CLI 组装；本包交付 `Judge`/`MatchCalibration`/`VerifyAudit`——证据链哈希校验、副本回填、τ 合法性、fail-closed 无共同 cell 判 inconclusive） |
+| `internal/verify` | 判定：JSD vs τ（按 (k,n,scope,通道) 匹配校准库），含 inconclusive 缓冲 | `VerifyAudit(responses []*store.Response, claimed *store.Fingerprint, Options) (*Result, error)`（M2.5 具化：设计 §2.1 的 `Verify(ctx, target Provider, claimed, k, n)` 为端到端含采集，由 M2.7 CLI 组装；本包交付 `Judge`/`MatchCalibration`/`VerifyAudit`——证据链哈希校验、副本回填、τ 合法性、fail-closed 无共同 cell 判 inconclusive）；**M2.10 接口演进**：新增 **τ 来源（TauSource）概念**——优先级 `--tau 直传 > 校准库匹配档 > 内置参考线`（direct 0.140 / reasoning 0.16，标注“未校准”）；`MatchCalibration` 无档时 **compare 路径回退内置线**（audit 保持无档拒绝 `ErrNoCalibration`）；`Result` 增 `TauSource` 字段支撑“τ 来源”输出与未校准标注 |
 | `internal/calibrate` | genuine/impostor 试验（分裂半奇偶切分原语）、ROC/AUC/EER、bootstrap CI、(k,n,通道) 分档（M1 范围）；LOO 1-NN 已实现（仅 M1.6 复现用途，投产已移出 MVP——用户决策 2026-08-07）；UPGMA/ARI 已移出 MVP（搁置，不复刻论文 Fig.2） | `Calibrate(genuine, impostor []float64, opts) → *store.Calibration`（分档键 Scope/K/NPerCell/通道 与 CalibratedAt 由调用方填充；空输入或非有限阈值返回 nil 无效校准）；`SplitHalves` / `LOO1NN` |
-| `internal/reporter` | 距离矩阵热力图、单端点报告（逐 cell JSD 明细 + QC flags）、告警；**Go `html/template` 默认转义防 XSS**；聚类图已移出 MVP（用户决策 2026-08-07） | `Report(auditID) → md/html` |
+| `internal/reporter` | 距离矩阵热力图、单端点报告（逐 cell JSD 明细 + QC flags）、**compare 比较报告（三参考线距离图/逐 cell JSD 排序/分布对比/两端点 QC）**、告警；**Go `html/template` 默认转义防 XSS**；聚类图已移出 MVP（用户决策 2026-08-07） | `Report(auditID) → md/html`；`CompareReport(ref, target, result) → html`（M2.10） |
 | `internal/store` | JSON/JSONL 文件存储：目录布局（§4.1）、原子写（tmp+rename）、JSONL 追加、幂等去重索引、证据链（append-only + raw_sha256）、schema_version 校验 | SaveAudit / AppendResponse / LoadResponses / SaveFingerprint / ... |
 | `internal/config` | 配置加载（YAML/环境变量），密钥用不可序列化类型；**所有阈值/规则集中配置** | `Load(path) → Config` |
-| `cmd/onetoken` | CLI 入口（cobra）：enroll/audit/calibrate/probe/report/drift | `main.go` |
+| `cmd/onetoken` | CLI 入口（cobra）：compare/enroll/audit/calibrate/probe/report/drift | `main.go` |
 
 ### 2.2 数据流（一次完整审计）
 
 ```
-前置条件：claimed_model 已 enroll（models 表 + 参考指纹）。**MVP 内无参考指纹的模型无法验证**（原 §3.5 互比降级已移出 MVP，2026-08-07）。
+前置条件（audit 路径）：claimed_model 已 enroll（models 表 + 参考指纹）。**audit 路径下 MVP 内无参考指纹的模型无法验证**（原 §3.5 互比降级已移出 MVP，2026-08-07）；compare 直比不受此限（参考端点现场采集，见下）。
 
 enroll 阶段（低频，如每周）：
   参考源 ProviderConfig → provider/（协议协商+请求） → collector/（并发电池调度）
@@ -121,6 +123,18 @@ audit 阶段（高频，如每日）：
     → preprocess/ → detector/（清洗：无效/推理/缓存签名）
     → verify/（指纹距离 vs τ） → Verdict{pass|suspicious|inconclusive} → store/ + reporter/ 告警
 ```
+
+compare 阶段（直比，无需建档，v0.22；与已移出的 §3.5 谱系互比不同——compare 是用户指定两端点直接比对）：
+  参考 ProviderConfig ─┐
+                       ├─ 双路并发（各自限流预算）→ collector/ → preprocess/ → detector/
+  待测 ProviderConfig ─┘                                          → fingerprint/（内存，不落库）
+    → verify/（Distance vs τ 优先级：--tau 直传 > 校准库匹配档 > 内置参考线 direct 0.140 / reasoning 0.16）
+    → Verdict + 比较报告（HTML：距离点 vs 三参考线（0.075 同模型分裂半 / 0.140 噪声底线 / 0.227 跨 provider
+      服务栈——M1.6 实测基线）+ 生效判定线（带 τ 来源标注）/ 逐 cell JSD 排序 / 分布对比 / 两端点 QC flags
+      / 参考端点来源标注（URL+provider 名）；--json 结构化）
+    → 默认不落任何指纹/响应（--save-ref 落参考指纹等价 enroll；--save-responses 落两端点响应 JSONL 取证）
+    ⚠️ 内置参考线未校准（§3.4）：误报/漏报率未知；跨 provider 同模型距离中位 0.227 > 0.140，健康对可能判
+      suspicious（服务栈差异而非替换证据），判定以距离+落线位置为准
 
 **流水线顺序约束**（避免依赖环）：`normalize → classify → screen(detector) → dist/JSD/verdict(verify)`。preprocess 独立，verify 只做分布+距离+判定；responses JSONL 只追加不修改（取证语义），派生列（normalized/classification）由 preprocess 一次性写入。
 
@@ -183,9 +197,12 @@ Unicode NFC → 剥离标点/引号 → 大小写折叠 → 阿拉伯-印度/中
 - **推理通道 τ 实测依据（v0.20，DeepSeek）**：genuine（同模型分裂半/独立采集）≈ 0.09–0.11，impostor（flash vs pro）≈ 0.24——**分离度约 2 倍**（窄于非推理 0.075/0.489 的 6.5 倍），推理通道 τ 建议 0.15–0.18 区间（M2.9 正式校准定值）；逐 cell 有噪声（同模型 7/40 cell >0.2），**推理通道审计建议 k=16 或全 cell**（k=8 抽样波动大，impostor 可漂至 0.15）；
 - **τ CI 缺口裁决（M2.5）**：校准未存 τ 自身 CI，inconclusive 缓冲采用**绝对缓冲** `TauInconclusiveBuffer`（默认 0.02；背景 genuine 中位 0.075 / 跨 provider 0.227，需按本地校准数据实测调整）——判定：s ≤ τ−buf → pass；s > τ+buf → suspicious；|s−τ| ≤ buf → inconclusive；
 - **k_min 双口径裁决（M2.5）**：门槛以 B′ 参与 cell 数 `cellsUsed`（fingerprint.Distance 返回值）为准（与 §2.1 一致）；detector 的 ValidCells（审计侧计数）仅作报告；**fail-closed：无共同可比较 cell（cellsUsed=0）判 inconclusive，不得判 pass**；校准档 τ 须有限且 ∈ [0,1]（读侧校验，防篡改/损坏静默改变结论）；
+- **内置参考线未校准风险（v0.22，compare 路径）**：内置线 direct 0.140 / reasoning 0.16 源自 M1.6 实测距离基线（**中位数口径**，非 ROC 校准的 FPR≈1% 操作点）——误报/漏报率未知、无 bootstrap CI；跨 provider 同模型对距离中位 0.227 > 0.140，compare 对「官方 API vs 聚合器同名端点」可能判 suspicious（服务栈差异，非替换证据）；判定一律带 τ 来源标注（--tau / 校准档 / 内置线“未校准”）；正式使用前建议 calibrate 校准；
 - ROC/AUC/EER/1-NN（复现用途）**Go 自写**（各几十行），须单测：perfect/random 分类器 AUC=1/0.5 的构造性校验；**UPGMA/ARI 已移出 MVP**（用户决策 2026-08-07，不复刻论文 Fig.2）。
 
 ### 3.5 谱系辅助信号（**已移出 MVP**，用户决策 2026-08-07）
+
+> **与 compare 直比区分（v0.22）**：compare 是用户指定两个端点（参考/待测）的**直接比对**；谱系互比是库内最近邻家族分类——两者不同，勿混淆。
 
 对无法建立参考指纹的模型（无第一方 API、无开源权重），原设计退化为**端点间互比**：与已建档模型做最近邻（LOO 1-NN）分类，输出"最接近的已知模型家族"（论文中 `palmyra-x5` 落入 Qwen 邻域的先例）。此模式产出**线索**而非判定，对单端点真伪判定无实际用途——**投产路径已移出 MVP 主线，标注搁置**；LOO 1-NN 实现保留（仅 M1.6 复现用途，`internal/calibrate.LOO1NN`），若日后恢复则单独设计。
 
@@ -444,6 +461,16 @@ onetoken enroll --provider openai-official --model openai/gpt-5.1
 # 探测：测量有效性预检
 onetoken probe --provider openrouter --model openai/gpt-5.1
 
+# 直比（compare）：参考与待测端点均直传，无需建档——现场采集比对，输出 HTML 报告 + JSON
+onetoken compare \
+  --ref-base-url <url> --ref-api-key-env <ENV> [--ref-protocol auto|responses|chat|anthropic] \
+  --target-base-url <url> --target-api-key-env <ENV> [--target-protocol ...] \
+  [--k 8|16] [--n 15|30] [--reasoning] [--tau <float>] [--save-ref] [--json] [--no-report]
+#   判定 τ 优先级：--tau 直传 > 校准库匹配档 > 内置参考线（direct 0.140 / reasoning 0.16，标注“未校准”）；
+#   ⚠️ 内置线未校准：误报/漏报率未知（非 ROC 校准操作点），跨 provider 同模型可能判 suspicious（服务栈差异，§3.4）；
+#   stdout 输出简洁判定摘要（判定徽标+距离+cellsUsed+通道+τ 来源+参考端点来源+关键证据），详细对比数据走 HTML/JSON
+#   --save-ref：参考指纹落库（等价 enroll）；--save-responses：两端点响应 JSONL 取证落盘
+
 # 审计：验证端点真伪（前置条件：claimed_model 已 enroll）
 onetoken audit --provider openrouter --claimed-model openai/gpt-5.1 \
                --k 8 --n 15 [--tau auto] [--json]
@@ -494,6 +521,7 @@ onetoken drift --model qwen/qwen3-8b
 - 对 OpenRouter 同名端点 audit，**验收标准为"判定与跨通道校准后 τ 一致"，如实报告实际距离**——不预设"必须 pass"：论文实测 29% 同模型跨 provider 对超出 impostor 区间、OpenRouter 多上游路由可能造成审计不稳定，健康端点也可能 fail（生态事实而非实现 bug）；审计响应记录上游 provider 字段用于解释不稳定；
 - **推理通道试点（v0.19/v0.20 实测，DeepSeek）**：deepseek-v4-flash/pro 均为推理模型（reasoning_tokens 占满 16 预算、finish=length）——系统 1 直接排除；系统 2 以 max_tokens=512 重采拿到 post-reasoning 回答（flash 偏好 42、pro 偏好 73）——**可行性已证实**；**稳定性实测（v0.20）**：flash 两次独立采集（40 cell × 30）距离 0.1116 ≈ 分裂半基线 0.09–0.10（同模型几乎不变）、flash vs pro 0.2376/0.2382 可复现（2 倍分离）——推理通道判定可用，τ 单独校准（0.15–0.18，M2.9）；另发现管线关键修复：归一化输入必须为提取的回答文本（Text）而非 RawCompletion（含响应唯一 id 会污染分布键）；
 - 用**不同模型**端点冒充 → 期望 suspicious（impostor）；
+- **compare 直比试点（v0.22）**：真实密钥就绪后即用 compare 对「官方 API（参考）vs 聚合器同名端点（待测）」与「官方 API vs 不同模型（冒充）」各比一次——验证内置参考线判定合理性（如实报告距离与落线位置；**预期管理：跨 provider 同模型距离中位 0.227 > 内置线 0.140，健康对可能判 suspicious，属服务栈差异而非替换证据**）、双路并发采集耗时、HTML 报告可读性；
 - 验收：探测器 flag 正确性断言（reasoning_tokens、T=0 探针、缓存签名、有效率、hidden-reasoning）。
 
 ### 9.3 里程碑 M3：替换模拟实验
@@ -573,7 +601,7 @@ onetoken drift --model qwen/qwen3-8b
 | 里程碑 | 内容 | 验收标准 |
 |---|---|---|
 | **M1** | store + 归一化 + JSD + 校准模块（Go）；论文数据复现（**先复刻论文实现语义**） | 前置门 pin 语义；分层值级回归通过（cell 级 0.075/0.489、模型对级 0.227/0.140，±5%）**且** AUC 0.971 / EER 7.3% ±2pp；算法单测就绪；**数据不可得时按 §9.1 兜底口径验收**（前置门空置、论文数值项 N/A、标注“语义未 pin”） |
-| **M2** | 统一调用层三协议 + 并发采集器 + 探测器 + 云端 API 参考 + 端到端审计 | 三协议各跑通一次 enroll（含 **URL 构造单测**，防双 /v1）；判定与校准后 τ 一致；探测器 flag 正确；≥2 开源模型（云端 API 建档） |
+| **M2** | 统一调用层三协议 + 并发采集器 + 探测器 + 云端 API 参考 + 端到端审计 + **compare 直比模式** | 三协议各跑通一次 enroll（含 **URL 构造单测**，防双 /v1）；判定与校准后 τ 一致；探测器 flag 正确；≥2 开源模型（云端 API 建档）；**compare 无需建档直比可判**（mock 同模型 pass / 冒充 suspicious） |
 | **M3** | 替换模拟实验（公网冒充假目标）+ 主辅操作点 + 报告 | τ_fpr1 处 TPR≥T（先定指标）；τ_fpr5 处 TPR≥90%；真/假目标各 ≥8（本地 vLLM 分支已移出 MVP）；重复审计一致性 ≥80% |
 | **M4** | 调度 + 告警 + 漂移管理 + CLI 完整 | 140 次审计误报 ∈ 二项 CI（≈0–4）；注入替换全部捕获 |
 
@@ -637,4 +665,4 @@ onetoken/
 
 ---
 
-*本文档依据论文 arXiv:2607.10252 的协议与数据设计；**v0.21 落地优先方向（用户决策 2026-08-07）：验收口径保持统计严谨（M3/M4 不变），论文装饰性模块移出 MVP（UPGMA 聚类图、谱系信号 1-NN 投产、本地 vLLM 假目标），开发重心转向真实试点与工程落地功能**；v0.10 并入 M1.6 重放结果（七层对拍全命中：0.075/0.489/0.140/0.483、AUC 0.971318、EER 0.0729、1-NN 59.5%；**0.227 由 L8 复现命中 0.2230**——数据集同一 slug 多 provider 记录，同模型跨 provider 距离；preprocess 颜色/硬币词表对齐论文 canonical），M1.5 语义 pin 结果（JSD 原始标度/基 2/无平滑与既定实现一致、R pROC 工具链、采样参数确认，§3.3/§9.1/头部决策记录）；v0.8 并入用户决策（M1.5 数据兜底：Zenodo 不可得时前置门空置、改由用户自备权威数据替代、JSD 标度维持既定实现并标注未 pin，§3.3/§9.1，含审查后归因拆分与 §14 兜底分支）；v0.7 并入 M1.4 校准算法实现后的接口契约演进（§2.1 calibrate 签名、§3.4 τ_fpr 计算语义）；v0.6 并入 M1.3 实现后的接口契约演进（§2.1 fingerprint 签名、§3.3 T=0 变体语义）；v0.5 并入用户评审意见（统一提供商调用层、Go 性能选型、JSON/JSONL 存储）与五轮对抗式审查结论。*
+*本文档依据论文 arXiv:2607.10252 的协议与数据设计；**v0.22 compare 直比模式（用户决策 2026-08-07：参考/待测端点均用户直传、无需先建档、内置参考线判定、HTML/JSON 输出）**；**v0.21 落地优先方向（用户决策 2026-08-07）：验收口径保持统计严谨（M3/M4 不变），论文装饰性模块移出 MVP（UPGMA 聚类图、谱系信号 1-NN 投产、本地 vLLM 假目标），开发重心转向真实试点与工程落地功能**；v0.10 并入 M1.6 重放结果（七层对拍全命中：0.075/0.489/0.140/0.483、AUC 0.971318、EER 0.0729、1-NN 59.5%；**0.227 由 L8 复现命中 0.2230**——数据集同一 slug 多 provider 记录，同模型跨 provider 距离；preprocess 颜色/硬币词表对齐论文 canonical），M1.5 语义 pin 结果（JSD 原始标度/基 2/无平滑与既定实现一致、R pROC 工具链、采样参数确认，§3.3/§9.1/头部决策记录）；v0.8 并入用户决策（M1.5 数据兜底：Zenodo 不可得时前置门空置、改由用户自备权威数据替代、JSD 标度维持既定实现并标注未 pin，§3.3/§9.1，含审查后归因拆分与 §14 兜底分支）；v0.7 并入 M1.4 校准算法实现后的接口契约演进（§2.1 calibrate 签名、§3.4 τ_fpr 计算语义）；v0.6 并入 M1.3 实现后的接口契约演进（§2.1 fingerprint 签名、§3.3 T=0 变体语义）；v0.5 并入用户评审意见（统一提供商调用层、Go 性能选型、JSON/JSONL 存储）与五轮对抗式审查结论。*
