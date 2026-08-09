@@ -33,6 +33,11 @@ func newFakeLimiter(rpm, rpd int) (*RateLimiter, *fakeClock) {
 	fc := &fakeClock{t: time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)}
 	l.now = fc.now
 	l.sleep = fc.sleep
+	// ref 与假时钟同源（时间炸弹修复，2026-08-09 环境暴露）：NewRateLimiter 用
+	// time.Now() 初始化 rpmRef/rpdRef，若假时钟起点早于真实 now（硬编码日期），
+	// el=now−ref<0 导致桶永不补充、Wait 死循环；重置到假时钟起点保持测试原始语义。
+	l.rpmRef = fc.t
+	l.rpdRef = fc.t
 	return l, fc
 }
 

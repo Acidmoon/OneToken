@@ -465,7 +465,7 @@ onetoken probe --provider openrouter --model openai/gpt-5.1
 onetoken compare \
   --ref-base-url <url> --ref-api-key-env <ENV> [--ref-protocol auto|responses|chat|anthropic] \
   --target-base-url <url> --target-api-key-env <ENV> [--target-protocol ...] \
-  [--k 8|16] [--n 15|30] [--reasoning] [--tau <float>] [--save-ref] [--json] [--no-report]
+  [--k 8|16] [--n 15|30] [--reasoning] [--tau <float>] [--save-ref --ref-model-id <model> [--ref-version <v>]] [--save-responses] [--json] [--no-report]
 #   判定 τ 优先级：--tau 直传 > 校准库匹配档 > 内置参考线（direct 0.140 / reasoning 0.16，标注“未校准”）；
 #   ⚠️ 内置线未校准：误报/漏报率未知（非 ROC 校准操作点），跨 provider 同模型可能判 suspicious（服务栈差异，§3.4）；
 #   stdout 输出简洁判定摘要（判定徽标+距离+cellsUsed+通道+τ 来源+参考端点来源+关键证据），详细对比数据走 HTML/JSON

@@ -35,7 +35,7 @@ var (
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgPath, "config", "config/providers.yaml", "providers 配置路径（缺省 config/providers.yaml）")
-	rootCmd.AddCommand(enrollCmd, probeCmd, auditCmd)
+	rootCmd.AddCommand(enrollCmd, probeCmd, auditCmd, compareCmd)
 }
 
 func main() {

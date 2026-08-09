@@ -1,10 +1,13 @@
 // Package verify 实现审计判定（设计 §2.1、§3.4）：
 //   - 指纹距离（复用 fingerprint.Distance，M1.3）；
 //   - τ 匹配：按 (k, n, scope, ref_channel, target_channel) 精确匹配校准库，
-//     无匹配档 → 拒绝审计（设计 §3.4：强制全电池校准或拒绝，实现选拒绝）；
+//     无匹配档 → 拒绝审计（设计 §3.4：强制全电池校准或拒绝，实现选拒绝）
+//     或 compare 路径回退内置参考线（v0.22，M2.10：TauBuiltin > 0 时）；
 //   - 三分支判定：pass（s ≤ τ−buf）/ suspicious（s > τ+buf）/
 //     inconclusive（|s−τ| ≤ buf，τ CI 缺口裁决：绝对缓冲 TauInconclusiveBuffer，
 //     需本地校准）；
+//   - τ 来源（TauSource）留痕：override（--tau 直传）/ calibration（校准档）/ builtin
+//     （内置参考线，未校准）——支撑输出「τ 来源」标注与未校准风险提示；
 //   - 测量有效性联动（M2.4 detector）：测量级 flag（hidden-reasoning /
 //     response-caching / temperature-not-honored）或 unreachable → 不进指纹，
 //     判 inconclusive；safety-layer-change 为告警项不阻断判定；
@@ -63,6 +66,10 @@ type Options struct {
 	// TauOverride 直传阈值（>0 时跳过校准库匹配，直接以该值判定；冒烟/临时场景，
 	// 如试点无校准库。正常审计保持 0=auto 查库）。须有限且 ∈ [0,1]。
 	TauOverride float64
+	// TauBuiltin 内置参考线（v0.22，compare 路径；>0 时：校准库无匹配档则回退
+	// 该值判定并标 TauSource=builtin；audit 保持 0=无内置线，无档拒绝 ErrNoCalibration）。
+	// 未校准中位数基线（误报/漏报率未知），CLI 按通道取值（direct=0.140 / reasoning=0.16）。
+	TauBuiltin float64
 	// T0Responses 可选 T=0 探针响应（temperature-not-honored 检测）。
 	T0Responses []*store.Response
 	// FailedTasks/TotalTasks 采集失败统计（unreachable）。
@@ -80,6 +87,9 @@ type Result struct {
 	Flags       detector.Flags
 	Reason      string
 	Calibration *store.Calibration
+	// TauSource τ 来源（v0.22）：override（--tau 直传）/ calibration（校准档）/
+	// builtin（内置参考线，未校准——输出须带「未校准」标注）。
+	TauSource   string
 	CellsDetail map[string]float64 // 逐 cell JSD（§4.3 Audit.CellsDetail 用）
 }
 
@@ -226,20 +236,32 @@ func VerifyAudit(responses []*store.Response, claimed *store.Fingerprint, opts O
 		return res, nil
 	}
 
-	// 6. 判定（设计 §3.4）
+	// 6. 判定（设计 §3.4）。τ 来源优先级：--tau 直传 > 校准档 > 内置参考线
+	// （v0.22 compare 路径；audit 无内置线）。TauSource 留痕供输出标注。
 	if opts.TauOverride > 0 {
 		// 直传阈值模式（冒烟/临时）：跳过校准库匹配，τ 合法性校验同档。
 		if !finite01(opts.TauOverride) {
 			return nil, fmt.Errorf("verify: --tau=%v 非法（JSD 值域 [0,1]）", opts.TauOverride)
 		}
 		res.Threshold = opts.TauOverride
+		res.TauSource = "override"
 		res.Verdict = Judge(score, opts.TauOverride, opts.Settings.TauInconclusiveBuffer)
 		return res, nil
 	}
-	// 校准档匹配（设计 §3.4：按请求 k/n/scope/通道精确匹配，无档拒绝审计）
+	// 校准档匹配（设计 §3.4：按请求 k/n/scope/通道精确匹配）
 	cal := MatchCalibration(opts.Calibrations, opts.K, opts.N, opts.Scope,
 		opts.RefChannel, opts.TargetChannel)
 	if cal == nil {
+		// 无匹配档：compare 路径回退内置参考线（v0.22，未校准基线）；audit 拒绝。
+		if opts.TauBuiltin > 0 {
+			if !finite01(opts.TauBuiltin) {
+				return nil, fmt.Errorf("verify: 内置参考线 τ=%v 非法（JSD 值域 [0,1]）", opts.TauBuiltin)
+			}
+			res.Threshold = opts.TauBuiltin
+			res.TauSource = "builtin"
+			res.Verdict = Judge(score, opts.TauBuiltin, opts.Settings.TauInconclusiveBuffer)
+			return res, nil
+		}
 		return nil, fmt.Errorf("%w: (k=%d, n=%d, scope=%q, ref=%q, tgt=%q)",
 			ErrNoCalibration, opts.K, opts.N, opts.Scope, opts.RefChannel, opts.TargetChannel)
 	}
@@ -250,6 +272,7 @@ func VerifyAudit(responses []*store.Response, claimed *store.Fingerprint, opts O
 	}
 	res.Calibration = cal
 	res.Threshold = cal.TauFPR1
+	res.TauSource = "calibration"
 	res.Verdict = Judge(score, cal.TauFPR1, opts.Settings.TauInconclusiveBuffer)
 	return res, nil
 }

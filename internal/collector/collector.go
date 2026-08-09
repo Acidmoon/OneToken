@@ -39,6 +39,16 @@ const maxConcurrency = 256
 // defaultMaxTokens 是输出上限默认值（设计 §3.1：16；按协议映射 max_tokens/max_output_tokens）。
 const defaultMaxTokens = 16
 
+// ResponseSink 是采集响应写入端（幂等索引 + 追加）。
+// store.Store（磁盘 JSONL，证据链）与 store.MemoryStore（内存，compare 不落库
+// 路径，M2.10）均满足；接口定义在消费方（collector），Go 结构类型隐式实现。
+type ResponseSink interface {
+	// LoadResponsesIndex 返回已完成样本（cell+sample_idx 键）集合。
+	LoadResponsesIndex(auditID string) (map[string]bool, error)
+	// AppendResponse 追加一条响应（证据链 raw_sha256 必填）。
+	AppendResponse(auditID string, r *store.Response) error
+}
+
 // Options 是 RunBattery 的采集参数。
 type Options struct {
 	// ID 是响应 JSONL 的标识（responses/<ID>.jsonl），幂等续采的键：
@@ -132,7 +142,7 @@ type job struct {
 //   - 失败容忍：单任务失败（重试耗尽/密钥回显拒收等）记 TaskError 继续其他任务；
 //     ctx 取消或预算超限/致命错误（磁盘写失败）立即中止（部分结果已入库，可续采）；
 //   - 错误返回优先级：外部 ctx 取消 > 中止（预算超限/致命错误，含根因）> 任务错误聚合。
-func RunBattery(ctx context.Context, p provider.Provider, s *store.Store, b *battery.Battery,
+func RunBattery(ctx context.Context, p provider.Provider, s ResponseSink, b *battery.Battery,
 	cells []string, n int, T float64, opts Options) ([]*store.Response, error) {
 
 	if p == nil || s == nil || b == nil {

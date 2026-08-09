@@ -68,7 +68,7 @@ var auditCmd = &cobra.Command{
 		s := cfg.Settings
 
 		// --tau 校验（审查 L3）：NaN/负值/Inf 会静默回落 auto（用户笔误被忽略）
-		if auditFlag.tau != 0 && (auditFlag.tau < 0 || math.IsNaN(auditFlag.tau) || math.IsInf(auditFlag.tau, 0)) {
+		if auditFlag.tau != 0 && (auditFlag.tau < 0 || auditFlag.tau > 1 || math.IsNaN(auditFlag.tau) || math.IsInf(auditFlag.tau, 0)) {
 			return fmt.Errorf("--tau=%v 非法（需 0=auto 或 [0,1] 内的有限值）", auditFlag.tau)
 		}
 

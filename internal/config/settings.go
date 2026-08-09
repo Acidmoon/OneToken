@@ -38,6 +38,16 @@ type Settings struct {
 	// 校准未存 τ 自身 CI，用绝对缓冲代替；背景 genuine 中位 0.075 / 跨 provider 0.227，
 	// 默认 0.02 保守小缓冲，需按本地校准数据实测调整）
 
+	// 内置参考线（v0.22，compare 直比路径；未校准中位数基线，非 ROC 校准操作点——
+	// 误报/漏报率未知，正式使用前建议 calibrate；跨 provider 同模型距离中位 0.227 >
+	// 0.140，健康对可能判 suspicious 属服务栈差异）
+	BuiltinTauDirect    float64 // direct 通道（M1.6 噪声底线 0.140，§3.4）
+	BuiltinTauReasoning float64 // reasoning 通道（v0.20 建议区间 0.15–0.18 取 0.16；M2.9 正式校准后更新）
+
+	// 比较报告参考线（M1.6 实测基线，仅可视化解释用，不参与判定）
+	RefLineSameModel     float64 // 同模型分裂半距离中位（论文 0.075）
+	RefLineCrossProvider float64 // 跨 provider 同模型距离中位（L8 复现 0.227；服务栈差异参考）
+
 	// 传输层（M2.2，设计 §10.1）：重试矩阵与成本护栏
 	MaxRetries       int   // 单请求最大重试次数（不含首次；默认 3）
 	RetryBaseDelayMS int   // 指数退避基数（毫秒；默认 500，含 jitter 幅度）
@@ -82,6 +92,12 @@ func DefaultSettings() Settings {
 		DriftWindow:   5,
 
 		TauInconclusiveBuffer: 0.02,
+
+		BuiltinTauDirect:    0.140,
+		BuiltinTauReasoning: 0.16,
+
+		RefLineSameModel:     0.075,
+		RefLineCrossProvider: 0.227,
 
 		MaxRetries:       3,
 		RetryBaseDelayMS: 500,

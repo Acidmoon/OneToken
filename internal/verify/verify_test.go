@@ -2,6 +2,7 @@ package verify
 
 import (
 	"errors"
+	"math"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -422,5 +423,91 @@ func TestVerifyAuditCellsDetail(t *testing.T) {
 	}
 	if len(res.CellsDetail) != 3 {
 		t.Fatalf("CellsDetail 应有 3 个 cell，实际 %d", len(res.CellsDetail))
+	}
+}
+
+// ---- M2.10: τ 来源优先级（override > calibration > builtin）与内置线回退 ----
+
+func TestVerifyAuditTauSourcePriority(t *testing.T) {
+	b := testBattery(t)
+	cells := b.Cells()[:3]
+	claimed := claimedFp(cells)
+	rs := auditResponses(cells, 10, answers)
+
+	t.Run("无校准档 + TauBuiltin → 内置线回退", func(t *testing.T) {
+		opts := baseOpts(b)
+		opts.Calibrations = nil
+		opts.TauBuiltin = 0.14
+		res, err := VerifyAudit(rs, claimed, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.TauSource != "builtin" {
+			t.Fatalf("TauSource=%q，期望 builtin", res.TauSource)
+		}
+		if res.Threshold != 0.14 {
+			t.Fatalf("Threshold=%v，期望 0.14", res.Threshold)
+		}
+		if res.Calibration != nil {
+			t.Fatal("内置线路径不应命中校准档")
+		}
+		// 同分布 → 距离≈0 < 0.14−0.02 → pass
+		if res.Verdict != store.VerdictPass {
+			t.Fatalf("verdict=%q，期望 pass（score=%v）", res.Verdict, res.Score)
+		}
+	})
+
+	t.Run("有校准档 → 校准 τ（优先级高于内置线）", func(t *testing.T) {
+		opts := baseOpts(b)
+		opts.TauBuiltin = 0.14 // 同时存在时校准档优先
+		res, err := VerifyAudit(rs, claimed, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.TauSource != "calibration" {
+			t.Fatalf("TauSource=%q，期望 calibration", res.TauSource)
+		}
+		if res.Threshold != 0.05 {
+			t.Fatalf("Threshold=%v，期望校准档 0.05", res.Threshold)
+		}
+	})
+
+	t.Run("--tau 直传 → override（最高优先级）", func(t *testing.T) {
+		opts := baseOpts(b)
+		opts.TauOverride = 0.2
+		opts.TauBuiltin = 0.14
+		res, err := VerifyAudit(rs, claimed, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.TauSource != "override" {
+			t.Fatalf("TauSource=%q，期望 override", res.TauSource)
+		}
+		if res.Threshold != 0.2 {
+			t.Fatalf("Threshold=%v，期望 0.2", res.Threshold)
+		}
+	})
+
+	t.Run("audit 路径（无 TauBuiltin）无档仍拒绝", func(t *testing.T) {
+		opts := baseOpts(b)
+		opts.Calibrations = nil
+		opts.TauBuiltin = 0 // audit 不启用内置线
+		_, err := VerifyAudit(rs, claimed, opts)
+		if !errors.Is(err, ErrNoCalibration) {
+			t.Fatalf("audit 无档应拒绝 ErrNoCalibration，实际 %v", err)
+		}
+	})
+}
+
+func TestVerifyAuditBuiltinInvalidTau(t *testing.T) {
+	b := testBattery(t)
+	cells := b.Cells()[:3]
+	opts := baseOpts(b)
+	opts.Calibrations = nil
+	for _, bad := range []float64{math.NaN(), math.Inf(1), -0.1, 1.5} {
+		opts.TauBuiltin = bad
+		if _, err := VerifyAudit(auditResponses(cells, 10, answers), claimedFp(cells), opts); err == nil {
+			t.Fatalf("内置线 %v 非法应报错", bad)
+		}
 	}
 }
