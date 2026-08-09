@@ -2,7 +2,7 @@
 
 > **依据论文**：《One Token Is Enough: Fingerprinting and Verifying Large Language Models from Single-Token Output Distributions》（arXiv:2607.10252，Tomáš Bruckner）
 >
-> **文档状态**：v0.22（**compare 直比模式，用户决策 2026-08-07**：参考来源与待测端点均用户直传配置，**无需先建档**——`onetoken compare` 双路并发现场采集 → 内存构建参考指纹 → 直接比对判定；默认不落库（--save-ref 可选）；无校准库时用**内置参考线**（direct 0.140 / reasoning 0.16，标注未校准，--tau 可覆盖）；输出 HTML 比较报告 + JSON；v0.21 落地优先方向见下）
+> **文档状态**：v0.24（**compare 结果归档规范，用户决策 2026-08-10**：结果统一保存到 `results/<模型名>/` 文件夹——`reference.json`（参考模板结果）/ `target.json`（待测模型结果）分别命名 + `verdict.json` 判定 + `report.html`；compare 新增 **`--model` 必填**（两端点请求模型名 + 文件夹命名；`--target-model` 可选覆盖待测端模型字符串——同时修复 compare 请求模型名为占位符 "ref"/"target" 的真实端点缺口）；归档默认开启，`--results-dir` 默认 `./results`；v0.23 论文基线默认判定、v0.22 compare 直比模式、v0.21 落地优先方向见下）
 > **决策记录**：
 > - 实现语言：**Go**（IO 密集场景，启动毫秒级、单二进制、goroutine 并发天然适配批量采集；开发/迭代快）——用户拍板。
 > - **统一提供商调用层为系统核心**：任意 BaseURL + API Key 即可请求，三种协议适配（OpenAI Responses / OpenAI chat completions 兼容 / Anthropic messages），参考注册（enroll）与待审核模型（audit）共用此层——用户评审意见 1。
@@ -12,6 +12,8 @@
 > - 操作点：默认误报优先（τ 对应 FPR≈1%），附 τ_fpr5 辅评估点；阈值按 (k, n, 通道) 分档存储（§3.4、§4）。
 > - **落地优先方向（v0.21，用户意见 2026-08-07）**：工作须能落地、不重论文学术性、挑重点落实——验收口径**不放水**（M3/M4 统计验收保持）；论文装饰性模块**移出 MVP**：UPGMA 聚类图（原 v1.1，不复刻论文 Fig.2）、谱系信号 LOO 1-NN 投产（原 v1.2，1-NN 实现仅 M1.6 复现用途）、本地 vLLM 假目标（M3.1 本地分支）；开发重心：真实试点（M2.8）→ 报告/漂移/调度/备份等落地功能。
 > - **compare 直比模式（v0.22，用户意见 2026-08-07）**：参考来源与待测端点均用户直传（base_url+key+protocol），**无需先建档**——`onetoken compare` 双路并发现场采集 → 内存构建参考指纹（默认不落库，--save-ref 可选）→ 直接比对判定；无校准库时用**内置参考线**（direct 0.140 / reasoning 0.16，标注“未校准”，--tau 可覆盖）；输出 HTML 比较报告（三参考线距离图/逐 cell JSD 排序/分布对比/QC flags）+ `--json` 结构化；enroll+audit 保留用于长期监控与漂移管理。
+> - **工程取舍：论文基线即默认判定标准（v0.23，用户意见 2026-08-10）**：检测标准不依赖完整校准体系——权威参考始终来自用户指定端点（compare 直传 / enroll 建档），判定依据 = 论文方法论（逐 cell 基 2 JSD，M1.6 逐值对拍）+ 论文实测基线（0.075 分裂半 / 0.140 噪声底线 / 0.227 跨 provider / 0.483 跨模型中位）。**audit 无校准档时回退内置参考线并标注“未校准”（原 ErrNoCalibration 硬拒绝取消）**，与 compare 判定标准统一；τ 优先级不变（--tau > 校准档 > 内置线）；校准库与 calibrate CLI 降级为可选增强（本地生态精校时用，非使用前置）；ROC/EER/bootstrap 全套仍保留于 calibrate 包与 M3 验收，不进入默认判定路径。**检测报告为硬交付**：compare HTML 报告（M2.10 已交付）；audit 检测后生成单端点报告（M3.3 ①，优先级提升）。不可砍的方法论前提（用户确认）：每 cell ≥10 有效样本（JSD 统计有效下限）与 inconclusive 缓冲带（避免噪声边界硬判）。
+> - **compare 结果归档规范（v0.24，用户意见 2026-08-10）**：compare 结果统一保存到 **`results/<模型名>/`** 文件夹（默认根 `./results`，`--results-dir` 覆盖；模型名经 SanitizeID 清洗）：`reference.json`（参考模板结果：指纹 + 端点元数据 + QC）/ `target.json`（待测模型结果，同构）**分别命名** + `verdict.json`（判定：score/threshold/tau_source/verdict/cells_detail/双方 QC/种子）+ `report.html`；固定文件名、原子写覆盖（重测同模型即更新）；`--save-responses` 时追加 `reference.jsonl`/`target.jsonl` 原始响应取证（同文件夹）。**compare 新增 `--model` 必填**：同时作两端点请求的模型名与文件夹名（`--target-model` 可选覆盖待测端模型字符串）——修复 compare 请求模型名为占位符 "ref"/"target" 的真实端点缺口（mock 不校验未暴露）；归档默认开启（取代 v0.22“默认不落任何结果”的口径；`--save-ref` 落库等价 enroll 语义不变）；audit/enroll 保持现有 `data/` 结构不动（用户决策：归档规范 compare 优先）。**取舍留痕（M2.12 审查）**：① 判定未走出的错误路径（测量有效性短路/采集失败/参考端 k_min 或测量异常/--save-ref 落库失败）**不写归档**，避免半截结果误导；② 三个 JSON 走原子写（tmp+rename）为权威载体，`report.html` 与取证 JSONL 为可再生产物普通覆盖写且**最后写**（中断最坏留下旧 HTML/JSONL，JSON 始终一致）。
 > - **M1.5 前置门 pin 结果（v0.9）**：论文软件归档（Zenodo 21278793）核对完成——JSD 基 2、**原始标度（不取 sqrt）**、0·ln0=0 无平滑、cell 双方 ≥10 有效样本、R pROC 做 ROC/EER；与 Go 实现（M1.3/M1.4）完全一致，零改动；采样参数（T=1.0 n=30、T=0 n=3、前沿 n=15、max_tokens=16、四语言）与 §P0.3 一致；详见 `docs/OneToken-M1.5-语义pin记录.md`。
 
 ---
@@ -97,11 +99,11 @@
 |---|---|---|
 | `internal/provider` | **统一调用层（§6）**：三协议适配、协议协商、单请求级重试（429/5xx 分类、Retry-After 解析、jitter）、逐响应元数据、响应字节/完成长度上限、成本护栏 | `type Provider interface { Complete(ctx, Req) (*ResponseRecord, error) }` |
 | `internal/battery` | 40-cell 探针电池定义与提示词加载（与配置分离） | `Battery`（10 任务 × 4 语言，cell 清单） |
-| `internal/collector` | 并发采集：worker pool（per-provider 并发上限 4–8，硬上限 256）、幂等键、可恢复续采、种子打乱、限流预算、失败重试与总 deadline | `RunBattery(ctx, provider.Provider, *store.Store, *battery.Battery, cells []string, n int, T float64, Options) ([]*store.Response, error)`（M2.3 具化：幂等续采需 store 索引、提示词组装需 battery、并发/预算/进度经 Options；`[]Raw` 具化为 `[]*store.Response` 含证据链哈希与元数据）；**M2.10 compare 变体**：双路并发各自独立 `RunBattery` 实例（限流预算按 provider 独立）；不落库路径用内存/临时 store（幂等索引在内存，`--save-responses` 时用常规 store） |
+| `internal/collector` | 并发采集：worker pool（per-provider 并发上限 4–8，硬上限 256）、幂等键、可恢复续采、种子打乱、限流预算、失败重试与总 deadline | `RunBattery(ctx, provider.Provider, *store.Store, *battery.Battery, cells []string, n int, T float64, Options) ([]*store.Response, error)`（M2.3 具化：幂等续采需 store 索引、提示词组装需 battery、并发/预算/进度经 Options；`[]Raw` 具化为 `[]*store.Response` 含证据链哈希与元数据）；**M2.10 compare 变体**：双路并发各自独立 `RunBattery` 实例（限流预算按 provider 独立）；采集恒用内存 store（不落库；v0.24 起 `--save-responses` 改为归档文件夹写 `reference.jsonl`/`target.jsonl`，不再用常规 store） |
 | `internal/preprocess` | **归一化 + 分类**（valid/invalid/refusal/empty），在采样与探测之前运行 | `NormalizeClassify(raw) → Processed` |
 | `internal/detector` | 测量有效性探测与清洗（依赖 preprocess 分类结果），与 verify 解耦 | `Screen(responses []*store.Response, ScreenOptions) *Result`（M2.4 具化：设计 `Screen(processed)→{ok,flags,cleaned}` 的入参为原始响应（分类可预填或经 TaskForCell 现算），出参 Result 含 5 类 Flags + per-cell 统计 + ValidCells/KMinCells（inconclusive 信号）；cleaned 语义由调用方据 Flags 过滤实现；ScreenOptions：Settings/T0Responses/RefusalBaseline(nil=无)/FailedTasks/TotalTasks/TaskForCell） |
 | `internal/fingerprint` | 分布估计、**基 2 JSD（自写，直接按论文 Eq.1）**、指纹对象（构建自 `store.Fingerprint`） | `Distance(a, b *Fingerprint) (float64, int)`——返回 (距离, 参与 cell 数)，参与数供上层按有效 cell < k_min 判 inconclusive；`Build(responses) (*Fingerprint, error)` |
-| `internal/verify` | 判定：JSD vs τ（按 (k,n,scope,通道) 匹配校准库），含 inconclusive 缓冲 | `VerifyAudit(responses []*store.Response, claimed *store.Fingerprint, Options) (*Result, error)`（M2.5 具化：设计 §2.1 的 `Verify(ctx, target Provider, claimed, k, n)` 为端到端含采集，由 M2.7 CLI 组装；本包交付 `Judge`/`MatchCalibration`/`VerifyAudit`——证据链哈希校验、副本回填、τ 合法性、fail-closed 无共同 cell 判 inconclusive）；**M2.10 接口演进**：新增 **τ 来源（TauSource）概念**——优先级 `--tau 直传 > 校准库匹配档 > 内置参考线`（direct 0.140 / reasoning 0.16，标注“未校准”）；`MatchCalibration` 无档时 **compare 路径回退内置线**（audit 保持无档拒绝 `ErrNoCalibration`）；`Result` 增 `TauSource` 字段支撑“τ 来源”输出与未校准标注 |
+| `internal/verify` | 判定：JSD vs τ（按 (k,n,scope,通道) 匹配校准库），含 inconclusive 缓冲 | `VerifyAudit(responses []*store.Response, claimed *store.Fingerprint, Options) (*Result, error)`（M2.5 具化：设计 §2.1 的 `Verify(ctx, target Provider, claimed, k, n)` 为端到端含采集，由 M2.7 CLI 组装；本包交付 `Judge`/`MatchCalibration`/`VerifyAudit`——证据链哈希校验、副本回填、τ 合法性、fail-closed 无共同 cell 判 inconclusive）；**M2.10 接口演进**：新增 **τ 来源（TauSource）概念**——优先级 `--tau 直传 > 校准库匹配档 > 内置参考线`（direct 0.140 / reasoning 0.16，标注“未校准”）；`MatchCalibration` 无档时回退内置线（compare 于 v0.22、audit 于 v0.23 同样回退并标注“未校准”；原 audit 无档拒绝 `ErrNoCalibration` 取消——用户决策 2026-08-10）；`Result` 增 `TauSource` 字段支撑“τ 来源”输出与未校准标注 |
 | `internal/calibrate` | genuine/impostor 试验（分裂半奇偶切分原语）、ROC/AUC/EER、bootstrap CI、(k,n,通道) 分档（M1 范围）；LOO 1-NN 已实现（仅 M1.6 复现用途，投产已移出 MVP——用户决策 2026-08-07）；UPGMA/ARI 已移出 MVP（搁置，不复刻论文 Fig.2） | `Calibrate(genuine, impostor []float64, opts) → *store.Calibration`（分档键 Scope/K/NPerCell/通道 与 CalibratedAt 由调用方填充；空输入或非有限阈值返回 nil 无效校准）；`SplitHalves` / `LOO1NN` |
 | `internal/reporter` | 距离矩阵热力图、单端点报告（逐 cell JSD 明细 + QC flags）、**compare 比较报告（三参考线距离图/逐 cell JSD 排序/分布对比/两端点 QC）**、告警；**Go `html/template` 默认转义防 XSS**；聚类图已移出 MVP（用户决策 2026-08-07） | `Report(auditID) → md/html`；`CompareReport(ref, target, result) → html`（M2.10） |
 | `internal/store` | JSON/JSONL 文件存储：目录布局（§4.1）、原子写（tmp+rename）、JSONL 追加、幂等去重索引、证据链（append-only + raw_sha256）、schema_version 校验 | SaveAudit / AppendResponse / LoadResponses / SaveFingerprint / ... |
@@ -132,7 +134,13 @@ compare 阶段（直比，无需建档，v0.22；与已移出的 §3.5 谱系互
     → Verdict + 比较报告（HTML：距离点 vs 三参考线（0.075 同模型分裂半 / 0.140 噪声底线 / 0.227 跨 provider
       服务栈——M1.6 实测基线）+ 生效判定线（带 τ 来源标注）/ 逐 cell JSD 排序 / 分布对比 / 两端点 QC flags
       / 参考端点来源标注（URL+provider 名）；--json 结构化）
-    → 默认不落任何指纹/响应（--save-ref 落参考指纹等价 enroll；--save-responses 落两端点响应 JSONL 取证）
+    → **结果归档（v0.24）**：默认写入 `results/<模型名>/`——`reference.json`（参考模板结果）/
+      `target.json`（待测模型结果）分别命名 + `verdict.json` + `report.html`（固定文件名原子写覆盖）；
+      `--save-responses` 追加 `reference.jsonl`/`target.jsonl` 原始响应取证；
+      `--save-ref` 落参考指纹入库等价 enroll（data/ 库语义不变）
+      （M2.12 实现注记：原子写覆盖口径 = 三个 JSON 走 store.WriteJSONAtomic（tmp+rename），
+      report.html/JSONL 为可再生产物直接覆盖写；写顺序 JSON → JSONL → report.html；
+      端点键名统一 `base_url`；归档写失败硬报错；判定未走出（测量短路/错误）不写归档）
     ⚠️ 内置参考线未校准（§3.4）：误报/漏报率未知；跨 provider 同模型距离中位 0.227 > 0.140，健康对可能判
       suspicious（服务栈差异而非替换证据），判定以距离+落线位置为准
 
@@ -193,11 +201,11 @@ Unicode NFC → 剥离标点/引号 → 大小写折叠 → 阿拉伯-印度/中
 - **genuine 试验**：同一模型参考指纹与目标端点的分裂半对（按重复奇偶切分）→ 分布 D_genuine；
 - **impostor 试验**：模型 X 指纹 vs 模型 Y 指纹（Y≠X）→ 分布 D_impostor；
 - 输出：ROC 曲线、AUC、EER、τ_fpr1 / τ_fpr5、各自 TPR 与 bootstrap CI；
-- **分档维度**：(k_cells, n_per_cell, scope, ref_channel, target_channel) × (global / family / size-tier)；审计时精确匹配（Scope 为空串只命中空 Scope 档，防 global/family 同键误配），无匹配档时强制全电池校准或拒绝审计（实现选拒绝，`ErrNoCalibration`）；
+- **分档维度**：(k_cells, n_per_cell, scope, ref_channel, target_channel) × (global / family / size-tier)；审计时精确匹配（Scope 为空串只命中空 Scope 档，防 global/family 同键误配），无匹配档时回退内置参考线并标注“未校准”（v0.23，用户决策 2026-08-10：论文基线即默认判定标准；原“强制全电池校准或拒绝审计（`ErrNoCalibration`）”取消，`ErrNoCalibration` 仅保留给 TauBuiltin=0 的 API 调用方）；
 - **推理通道 τ 实测依据（v0.20，DeepSeek）**：genuine（同模型分裂半/独立采集）≈ 0.09–0.11，impostor（flash vs pro）≈ 0.24——**分离度约 2 倍**（窄于非推理 0.075/0.489 的 6.5 倍），推理通道 τ 建议 0.15–0.18 区间（M2.9 正式校准定值）；逐 cell 有噪声（同模型 7/40 cell >0.2），**推理通道审计建议 k=16 或全 cell**（k=8 抽样波动大，impostor 可漂至 0.15）；
 - **τ CI 缺口裁决（M2.5）**：校准未存 τ 自身 CI，inconclusive 缓冲采用**绝对缓冲** `TauInconclusiveBuffer`（默认 0.02；背景 genuine 中位 0.075 / 跨 provider 0.227，需按本地校准数据实测调整）——判定：s ≤ τ−buf → pass；s > τ+buf → suspicious；|s−τ| ≤ buf → inconclusive；
 - **k_min 双口径裁决（M2.5）**：门槛以 B′ 参与 cell 数 `cellsUsed`（fingerprint.Distance 返回值）为准（与 §2.1 一致）；detector 的 ValidCells（审计侧计数）仅作报告；**fail-closed：无共同可比较 cell（cellsUsed=0）判 inconclusive，不得判 pass**；校准档 τ 须有限且 ∈ [0,1]（读侧校验，防篡改/损坏静默改变结论）；
-- **内置参考线未校准风险（v0.22，compare 路径）**：内置线 direct 0.140 / reasoning 0.16 源自 M1.6 实测距离基线（**中位数口径**，非 ROC 校准的 FPR≈1% 操作点）——误报/漏报率未知、无 bootstrap CI；跨 provider 同模型对距离中位 0.227 > 0.140，compare 对「官方 API vs 聚合器同名端点」可能判 suspicious（服务栈差异，非替换证据）；判定一律带 τ 来源标注（--tau / 校准档 / 内置线“未校准”）；正式使用前建议 calibrate 校准；
+- **内置参考线未校准风险（v0.22 compare 路径；v0.23 起 audit 同样回退）**：内置线 direct 0.140 / reasoning 0.16 源自 M1.6 实测距离基线（**中位数口径**，非 ROC 校准的 FPR≈1% 操作点）——误报/漏报率未知、无 bootstrap CI；跨 provider 同模型对距离中位 0.227 > 0.140，对「官方 API vs 聚合器同名端点」可能判 suspicious（服务栈差异，非替换证据）；判定一律带 τ 来源标注（--tau / 校准档 / 内置线“未校准”，落盘审计记录含 tau_source 字段）；**用户决策 2026-08-10 接受此工程取舍**（论文基线即默认判定标准），本地生态精校再走 calibrate（可选增强，非前置）；
 - ROC/AUC/EER/1-NN（复现用途）**Go 自写**（各几十行），须单测：perfect/random 分类器 AUC=1/0.5 的构造性校验；**UPGMA/ARI 已移出 MVP**（用户决策 2026-08-07，不复刻论文 Fig.2）。
 
 ### 3.5 谱系辅助信号（**已移出 MVP**，用户决策 2026-08-07）
@@ -275,7 +283,7 @@ data/                              # 根目录可配置（默认 ~/.onetoken/dat
   "selected_cells": ["random_number_100:en"],
   "seed": 12345,
   "score": 0.18,
-  "threshold": 0.15, "threshold_scope": "global",
+  "threshold": 0.15, "threshold_scope": "global", "tau_source": "calibration",
   "verdict": "pass",
   "cells_detail": { "random_number_100:en": 0.12 },
   "qc_flags": [],
@@ -283,7 +291,7 @@ data/                              # 根目录可配置（默认 ~/.onetoken/dat
 }
 ```
 
-（预检阶段先建 pending 状态的审计文件，再采集写响应，最后更新 verdict；verdict ∈ pending|pass|suspicious|inconclusive|error）
+（预检阶段先建 pending 状态的审计文件，再采集写响应，最后更新 verdict；verdict ∈ pending|pass|suspicious|inconclusive|error；`tau_source` ∈ override|calibration|builtin 为 τ 来源留痕（v0.23，omitempty——旧记录无此字段按未知处理，builtin=内置参考线未校准））
 
 **responses/<audit_id>.jsonl**（每行一个响应对象，只追加）：
 
@@ -461,20 +469,25 @@ onetoken enroll --provider openai-official --model openai/gpt-5.1
 # 探测：测量有效性预检
 onetoken probe --provider openrouter --model openai/gpt-5.1
 
-# 直比（compare）：参考与待测端点均直传，无需建档——现场采集比对，输出 HTML 报告 + JSON
+# 直比（compare）：参考与待测端点均直传，无需建档——现场采集比对，结果归档 results/<模型名>/
 onetoken compare \
+  --model <被测模型名> \                    # 必填：两端点请求模型名 + 归档文件夹名
   --ref-base-url <url> --ref-api-key-env <ENV> [--ref-protocol auto|responses|chat|anthropic] \
-  --target-base-url <url> --target-api-key-env <ENV> [--target-protocol ...] \
-  [--k 8|16] [--n 15|30] [--reasoning] [--tau <float>] [--save-ref --ref-model-id <model> [--ref-version <v>]] [--save-responses] [--json] [--no-report]
+  --target-base-url <url> --target-api-key-env <ENV> [--target-protocol ...] [--target-model <名>] \
+  [--k 8|16] [--n 15|30] [--reasoning] [--tau <float>] [--results-dir ./results] \
+  [--save-ref --ref-model-id <model> [--ref-version <v>]] [--save-responses] [--json] [--no-report]
 #   判定 τ 优先级：--tau 直传 > 校准库匹配档 > 内置参考线（direct 0.140 / reasoning 0.16，标注“未校准”）；
 #   ⚠️ 内置线未校准：误报/漏报率未知（非 ROC 校准操作点），跨 provider 同模型可能判 suspicious（服务栈差异，§3.4）；
 #   stdout 输出简洁判定摘要（判定徽标+距离+cellsUsed+通道+τ 来源+参考端点来源+关键证据），详细对比数据走 HTML/JSON
-#   --save-ref：参考指纹落库（等价 enroll）；--save-responses：两端点响应 JSONL 取证落盘
+#   归档（v0.24）：results/<模型名>/ 下 reference.json（参考模板结果）/ target.json（待测模型结果）/
+#   verdict.json / report.html（固定文件名原子写覆盖）；--save-responses 追加 reference.jsonl/target.jsonl 取证；
+#   --save-ref：参考指纹落库（等价 enroll，data/ 库语义不变）
 
 # 审计：验证端点真伪（前置条件：claimed_model 已 enroll）
 onetoken audit --provider openrouter --claimed-model openai/gpt-5.1 \
                --k 8 --n 15 [--tau auto] [--json]
-#   --tau auto：按 (k,n,通道) 从校准库精确匹配；无匹配档则拒绝审计或强制全电池校准
+#   --tau auto：按 (k,n,通道) 从校准库精确匹配；无匹配档则回退内置参考线并标注“未校准”（v0.23，不再拒绝审计）
+#   检测后生成单端点报告为硬交付（M3.3 ①；compare 的 HTML 报告已于 M2.10 交付）
 
 # 校准 / 报告 / 漂移
 onetoken calibrate --scope global --recompute
@@ -665,4 +678,4 @@ onetoken/
 
 ---
 
-*本文档依据论文 arXiv:2607.10252 的协议与数据设计；**v0.22 compare 直比模式（用户决策 2026-08-07：参考/待测端点均用户直传、无需先建档、内置参考线判定、HTML/JSON 输出）**；**v0.21 落地优先方向（用户决策 2026-08-07）：验收口径保持统计严谨（M3/M4 不变），论文装饰性模块移出 MVP（UPGMA 聚类图、谱系信号 1-NN 投产、本地 vLLM 假目标），开发重心转向真实试点与工程落地功能**；v0.10 并入 M1.6 重放结果（七层对拍全命中：0.075/0.489/0.140/0.483、AUC 0.971318、EER 0.0729、1-NN 59.5%；**0.227 由 L8 复现命中 0.2230**——数据集同一 slug 多 provider 记录，同模型跨 provider 距离；preprocess 颜色/硬币词表对齐论文 canonical），M1.5 语义 pin 结果（JSD 原始标度/基 2/无平滑与既定实现一致、R pROC 工具链、采样参数确认，§3.3/§9.1/头部决策记录）；v0.8 并入用户决策（M1.5 数据兜底：Zenodo 不可得时前置门空置、改由用户自备权威数据替代、JSD 标度维持既定实现并标注未 pin，§3.3/§9.1，含审查后归因拆分与 §14 兜底分支）；v0.7 并入 M1.4 校准算法实现后的接口契约演进（§2.1 calibrate 签名、§3.4 τ_fpr 计算语义）；v0.6 并入 M1.3 实现后的接口契约演进（§2.1 fingerprint 签名、§3.3 T=0 变体语义）；v0.5 并入用户评审意见（统一提供商调用层、Go 性能选型、JSON/JSONL 存储）与五轮对抗式审查结论。*
+*本文档依据论文 arXiv:2607.10252 的协议与数据设计；**v0.24 compare 结果归档规范（用户决策 2026-08-10）：结果统一存 `results/<模型名>/`（reference.json/target.json 分别命名 + verdict.json + report.html，固定文件名原子写覆盖，--save-responses 追加 JSONL 取证）；compare 新增 --model 必填（请求模型名 + 文件夹命名，修复占位符 "ref"/"target" 真实端点缺口），--results-dir 默认 ./results；归档默认开启取代 v0.22 “默认不落任何结果”；audit/enroll 保持 data/ 结构**；**v0.23 工程取舍（用户决策 2026-08-10）：论文实测基线即默认判定标准——audit 无校准档回退内置参考线并标注“未校准”（取消 ErrNoCalibration 硬拒绝）、校准库降级可选增强、检测报告为硬交付；采样量与 inconclusive 缓冲为不可砍的方法论前提**；**v0.22 compare 直比模式（用户决策 2026-08-07：参考/待测端点均用户直传、无需先建档、内置参考线判定、HTML/JSON 输出）**；**v0.21 落地优先方向（用户决策 2026-08-07）：验收口径保持统计严谨（M3/M4 不变），论文装饰性模块移出 MVP（UPGMA 聚类图、谱系信号 1-NN 投产、本地 vLLM 假目标），开发重心转向真实试点与工程落地功能**；v0.10 并入 M1.6 重放结果（七层对拍全命中：0.075/0.489/0.140/0.483、AUC 0.971318、EER 0.0729、1-NN 59.5%；**0.227 由 L8 复现命中 0.2230**——数据集同一 slug 多 provider 记录，同模型跨 provider 距离；preprocess 颜色/硬币词表对齐论文 canonical），M1.5 语义 pin 结果（JSD 原始标度/基 2/无平滑与既定实现一致、R pROC 工具链、采样参数确认，§3.3/§9.1/头部决策记录）；v0.8 并入用户决策（M1.5 数据兜底：Zenodo 不可得时前置门空置、改由用户自备权威数据替代、JSD 标度维持既定实现并标注未 pin，§3.3/§9.1，含审查后归因拆分与 §14 兜底分支）；v0.7 并入 M1.4 校准算法实现后的接口契约演进（§2.1 calibrate 签名、§3.4 τ_fpr 计算语义）；v0.6 并入 M1.3 实现后的接口契约演进（§2.1 fingerprint 签名、§3.3 T=0 变体语义）；v0.5 并入用户评审意见（统一提供商调用层、Go 性能选型、JSON/JSONL 存储）与五轮对抗式审查结论。*

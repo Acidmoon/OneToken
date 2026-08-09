@@ -53,6 +53,45 @@ func TestAtomicWriteCreatesDirs(t *testing.T) {
 	}
 }
 
+// --- WriteJSONAtomic 导出包装（v0.24/M2.12：compare 归档复用原子写） ---
+
+func TestWriteJSONAtomic(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "results", "qwen__qwen3-8b", "verdict.json")
+	v := map[string]any{"schema_version": 1, "verdict": "pass"}
+	if err := WriteJSONAtomic(path, v); err != nil {
+		t.Fatalf("WriteJSONAtomic: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("写入后读取: %v", err)
+	}
+	if !strings.Contains(string(data), `"verdict": "pass"`) || !strings.HasSuffix(string(data), "\n") {
+		t.Fatalf("内容异常: %q", data)
+	}
+	// 覆盖写（重测同模型即更新）且无 .tmp-* 残留
+	v["verdict"] = "suspicious"
+	if err := WriteJSONAtomic(path, v); err != nil {
+		t.Fatalf("覆盖写: %v", err)
+	}
+	data, _ = os.ReadFile(path)
+	if !strings.Contains(string(data), "suspicious") {
+		t.Fatalf("覆盖未生效: %q", data)
+	}
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".tmp-") {
+			t.Fatalf("原子写残留临时文件: %s", e.Name())
+		}
+	}
+	// 不可序列化值 → 报错且不产生目标文件
+	if err := WriteJSONAtomic(filepath.Join(t.TempDir(), "bad.json"), func() {}); err == nil {
+		t.Fatal("不可序列化值应报错")
+	}
+}
+
 // --- 模型/指纹/审计/校准/漂移 往返 ---
 
 func TestModelRoundTrip(t *testing.T) {

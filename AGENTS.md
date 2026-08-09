@@ -8,8 +8,8 @@
 **OneToken** 是一个 Go 实现的 CLI 工具：基于论文《One Token Is Enough》（arXiv:2607.10252）的单 token 行为指纹方法，对"某提供商的某模型端点"做**黑盒真伪检测**（模型替换 / 量化顶替 / 版本回退 / 跨 provider 漂移）。
 
 - **实现语言**：Go（用户拍板；IO 密集场景，启动毫秒级、单二进制、goroutine 并发）
-- **当前状态**：P0 与 M1.1（存储层）已完成；下一任务 M1.2（preprocess 归一化）
-- **环境**：WSL2 (Ubuntu 22.04)，项目位于 `/home/acidmoon/projects/OneToken`；在 Windows VSCode 中需用 WSL Remote 打开（`\\wsl$\Ubuntu\home\acidmoon\projects\OneToken`）
+- **当前状态**：P0、M1（论文复现验收通过）已完成；M2 进行中（M2.1–M2.7、M2.9、M2.10 compare、M2.11 audit 无档回退已实现；M2.8 真实试点待用户密钥）；M3/M4 待办。进度唯一真相见 `docs/OneToken-实施计划.md`
+- **环境**：WSL2 (Ubuntu)，项目位于 `/home/Acidmoon/Coding/OneToken`（历史路径 `/home/acidmoon/projects/OneToken` 已迁移）；本机 Go 工具链在项目内 `.tools/go`（已 gitignore），用法：`export PATH="$PWD/.tools/go/bin:$PATH" GOCACHE="$PWD/.tools/gocache" GOMODCACHE="$PWD/.tools/gomod"`
 
 ## 2. 文档地图（必读与维护）
 

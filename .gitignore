@@ -43,3 +43,5 @@ coverage.*
 data/zenodo/
 /replay
 .review_tmp/
+.tools/
+/results/

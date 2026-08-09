@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -274,8 +275,9 @@ func TestE2EEnrollProtocols(t *testing.T) {
 	}
 }
 
-func TestE2EAuditNoCalibration(t *testing.T) {
-	// --tau auto（默认）且校准库为空 → ErrNoCalibration 拒绝（设计 §3.4）
+func TestE2EAuditNoCalibrationFallback(t *testing.T) {
+	// --tau auto（默认）且校准库为空 → 回退内置参考线并标注（v0.23：论文基线即
+	// 默认判定标准，不再 ErrNoCalibration 拒绝；τ 优先级 --tau > 校准档 > 内置线不变）
 	srv := httptest.NewServer(fakeHandler([]string{"42", "57", "88"}, ""))
 	defer srv.Close()
 	t.Setenv("ONETOKEN_DATA", t.TempDir())
@@ -286,10 +288,36 @@ func TestE2EAuditNoCalibration(t *testing.T) {
 	}
 	// k=16+seed 固定：确保 cellsUsed ≥ k_min 后到达校准匹配（与 pass 测试同参数）
 	out, err := runCLI(t, append([]string{"audit"}, append(base,
-		"--claimed-model", "m/a", "--k", "16", "--n", "10", "--seed", "42", "--tau", "0")...)...)
-	t.Logf("err=%v out=%s", err, out)
-	if err == nil || !strings.Contains(err.Error(), "无匹配校准档") {
-		t.Fatalf("无校准库应拒绝审计（ErrNoCalibration），实际 %v", err)
+		"--claimed-model", "m/a", "--k", "16", "--n", "10", "--seed", "42", "--tau", "0", "--json")...)...)
+	if err != nil {
+		t.Fatalf("无校准库应回退内置参考线判定（v0.23），实际报错 %v\n%s", err, out)
+	}
+	var res map[string]any
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("JSON 解析失败: %v\n%s", err, out)
+	}
+	if res["tau_source"] != "builtin" {
+		t.Fatalf("tau_source=%v，期望 builtin（无档回退内置参考线）", res["tau_source"])
+	}
+	if th, ok := res["threshold"].(float64); !ok || math.Abs(th-0.14) > 1e-9 {
+		t.Fatalf("threshold=%v，期望内置线 0.140（direct 通道）", res["threshold"])
+	}
+	if res["verdict"] == "" || res["verdict"] == "error" {
+		t.Fatalf("verdict=%v，期望有效判定（回退后不得拒绝）", res["verdict"])
+	}
+	// 落盘审计记录须带 τ 来源留痕（v0.23 审查闭环：audits/<id>.json 为长期证据，
+	// 仅有 threshold=0.14 无法区分内置线回退与校准档/直传）
+	auditID, _ := res["audit_id"].(string)
+	recRaw, err := os.ReadFile(os.Getenv("ONETOKEN_DATA") + "/audits/" + auditID + ".json")
+	if err != nil {
+		t.Fatalf("读取落盘审计记录失败: %v", err)
+	}
+	var rec map[string]any
+	if err := json.Unmarshal(recRaw, &rec); err != nil {
+		t.Fatalf("审计记录 JSON 解析失败: %v", err)
+	}
+	if rec["tau_source"] != "builtin" {
+		t.Fatalf("落盘审计记录 tau_source=%v，期望 builtin（持久层留痕）", rec["tau_source"])
 	}
 }
 

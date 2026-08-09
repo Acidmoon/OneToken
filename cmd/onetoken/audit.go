@@ -37,7 +37,8 @@ var auditCmd = &cobra.Command{
 输出距离与判定（设计 §3.4：pass ≤ τ−buf / suspicious > τ+buf / inconclusive）。
 
 前置条件：claimed-model 已 enroll（参考指纹存在）。--tau auto（默认）按
-(k,n,通道) 从校准库精确匹配；无匹配档拒绝审计（需先 calibrate 或 --tau 直传）。
+(k,n,通道) 从校准库精确匹配；无匹配档回退内置参考线（论文基线 direct 0.140 /
+reasoning 0.16，标注「未校准」，v0.23——不再拒绝审计）。
 --tau <float> 直传阈值（冒烟/临时，不查库）。
 
 端点选择与 enroll 相同（--provider 或直传参数）。密钥只走环境变量。`,
@@ -137,6 +138,12 @@ var auditCmd = &cobra.Command{
 			return fmt.Errorf("读取校准库失败: %w", err)
 		}
 		scope := "global"
+		// 内置参考线回退（v0.23，与 compare 同口径）：无校准档时按通道取论文基线，
+		// TauSource=builtin 留痕，输出带「未校准」标注（不再 ErrNoCalibration 拒绝）
+		tauBuiltin := s.BuiltinTauDirect
+		if claimedChannel(claimed) == "reasoning" {
+			tauBuiltin = s.BuiltinTauReasoning
+		}
 		vopts := verify.Options{
 			Settings:      s,
 			Battery:       b,
@@ -149,6 +156,7 @@ var auditCmd = &cobra.Command{
 			TargetChannel: srcName,                 // 被审计端点 provider（校准分档键，审查 R-7）
 			T0Responses:   t0,
 			TauOverride:   auditFlag.tau, // >0 直传阈值（冒烟/临时），0=auto 查库
+			TauBuiltin:    tauBuiltin,    // 无档回退内置参考线（v0.23）
 		}
 		res, err := verify.VerifyAudit(rs, claimed, vopts)
 		if err != nil {
@@ -177,6 +185,7 @@ var auditCmd = &cobra.Command{
 			Score:                 res.Score,
 			Threshold:             res.Threshold,
 			ThresholdScope:        scope,
+			TauSource:             res.TauSource, // τ 来源留痕（v0.23 审查闭环：builtin=内置参考线未校准）
 			Verdict:               res.Verdict,
 			CellsDetail:           res.CellsDetail,
 			QCFlags:               res.Flags.List(),
@@ -194,6 +203,7 @@ var auditCmd = &cobra.Command{
 			"verdict":    res.Verdict,
 			"score":      res.Score,
 			"threshold":  res.Threshold,
+			"tau_source": res.TauSource,
 			"cells_used": res.CellsUsed,
 			"flags":      flagsOrEmpty(res.Flags),
 			"reason":     res.Reason,
@@ -205,8 +215,8 @@ var auditCmd = &cobra.Command{
 		if auditFlag.jsonOut {
 			return printJSON(out)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "audit %s: %s score=%.4f τ=%.4f（cells=%d flags=%v）\n",
-			auditFlag.claimed, res.Verdict, res.Score, res.Threshold, res.CellsUsed, out["flags"])
+		fmt.Fprintf(cmd.OutOrStdout(), "audit %s: %s score=%.4f %s（cells=%d flags=%v）\n",
+			sanitizeCLIString(auditFlag.claimed), res.Verdict, res.Score, tauDisplay(res), res.CellsUsed, out["flags"])
 		return nil
 	},
 }

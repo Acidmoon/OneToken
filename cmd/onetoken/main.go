@@ -25,7 +25,7 @@ var (
 		Long: `onetoken 基于单 token 行为指纹（arXiv:2607.10252）对"某提供商的某模型端点"
 做黑盒真伪检测：模型替换 / 量化顶替 / 版本回退 / 跨 provider 漂移。
 
-子命令：enroll（建档参考指纹）/ probe（测量有效性预检）/ audit（审计判定）。
+子命令：compare（直比两端点，无需建档）/ enroll（建档参考指纹）/ probe（测量有效性预检）/ audit（审计判定）。
 密钥一律走环境变量（--api-key-env 或 providers.yaml 的 api_key_env），永不落盘。`,
 		Version:       version,
 		SilenceUsage:  true,

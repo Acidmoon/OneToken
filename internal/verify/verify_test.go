@@ -488,13 +488,13 @@ func TestVerifyAuditTauSourcePriority(t *testing.T) {
 		}
 	})
 
-	t.Run("audit 路径（无 TauBuiltin）无档仍拒绝", func(t *testing.T) {
+	t.Run("TauBuiltin=0 调用方无档仍拒绝（v0.23 起 CLI 均传内置线，API 层保留严格口径）", func(t *testing.T) {
 		opts := baseOpts(b)
 		opts.Calibrations = nil
-		opts.TauBuiltin = 0 // audit 不启用内置线
+		opts.TauBuiltin = 0 // 未启用内置线回退
 		_, err := VerifyAudit(rs, claimed, opts)
 		if !errors.Is(err, ErrNoCalibration) {
-			t.Fatalf("audit 无档应拒绝 ErrNoCalibration，实际 %v", err)
+			t.Fatalf("TauBuiltin=0 无档应拒绝 ErrNoCalibration，实际 %v", err)
 		}
 	})
 }

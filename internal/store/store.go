@@ -115,6 +115,7 @@ type Audit struct {
 	Score                 float64            `json:"score"`
 	Threshold             float64            `json:"threshold"`
 	ThresholdScope        string             `json:"threshold_scope,omitempty"` // global|family:<x>|size-tier
+	TauSource             string             `json:"tau_source,omitempty"`      // override|calibration|builtin（τ 来源留痕，v0.23；builtin=内置参考线未校准）
 	Verdict               string             `json:"verdict"`
 	CellsDetail           map[string]float64 `json:"cells_detail,omitempty"`
 	QCFlags               []string           `json:"qc_flags,omitempty"`
@@ -323,6 +324,11 @@ func writeJSON(path string, v any) error {
 	data = append(data, '\n')
 	return atomicWrite(path, data)
 }
+
+// WriteJSONAtomic 是 writeJSON 的导出包装（v0.24/M2.12：compare 结果归档
+// 写 data/ 目录之外的 results/<模型>/ 固定文件，复用同一 tmp+rename 原子语义，
+// 避免在命令层重复实现）。
+func WriteJSONAtomic(path string, v any) error { return writeJSON(path, v) }
 
 // versioned 读取并校验 schema_version：文件不存在时返回 os.ErrNotExist。
 func versioned[T any](path string, get func(v *T) int) (*T, error) {
